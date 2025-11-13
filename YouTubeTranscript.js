@@ -6,55 +6,35 @@ async function handleRequest(request) {
   const url = new URL(request.url)
   
   if (request.method !== 'GET') {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'Only GET requests are allowed'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    }, 400)
   }
   
   const ytUrl = url.searchParams.get('url')
   
   if (!ytUrl || ytUrl.trim() === '') {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'The url parameter is required'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    }, 400)
   }
   
   try {
     new URL(ytUrl)
   } catch (e) {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'Invalid URL format'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    }, 400)
   }
   
   if (!ytUrl.includes('youtube.com') && !ytUrl.includes('youtu.be')) {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'URL must be a YouTube video'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    }, 400)
   }
   
   let videoId;
@@ -69,29 +49,26 @@ async function handleRequest(request) {
       throw new Error();
     }
   } catch (e) {
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'Invalid YouTube video ID'
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+    }, 400)
   }
   
   try {
     const pageResponse = await fetch(ytUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
+      },
+      signal: AbortSignal.timeout(30000)
     });
     if (!pageResponse.ok) {
       throw new Error('Failed to fetch video page');
     }
     const html = await pageResponse.text();
     
-    const match = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/);
+    // Improved regex to capture full player response (non-greedy until matching })
+    const match = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]*?\});/);
     if (!match) {
       throw new Error('Could not find player response');
     }
@@ -102,9 +79,10 @@ async function handleRequest(request) {
       throw new Error('No captions available');
     }
     
+    const language = url.searchParams.get('language') || 'en';
     let captionUrl = captionTracks[0].baseUrl;
     for (let track of captionTracks) {
-      if (track.languageCode === 'en') {
+      if (track.languageCode === language) {
         captionUrl = track.baseUrl;
         break;
       }
@@ -113,22 +91,22 @@ async function handleRequest(request) {
     const captionResponse = await fetch(captionUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
+      },
+      signal: AbortSignal.timeout(30000)
     });
     if (!captionResponse.ok) {
       throw new Error('Failed to fetch captions');
     }
     const xml = await captionResponse.text();
     
-    // Manual XML parsing for YouTube captions: extract text content between <text> tags
+    // Improved XML parsing: extract text with timestamps and clean
     const texts = [];
-    const textMatches = xml.match(/<text[^>]*>(.*?)<\/text>/gs);
+    const textMatches = xml.match(/<text start="[^"]+" dur="[^"]+">([^<]+)<\/text>/g);
     if (textMatches) {
       textMatches.forEach(match => {
-        let text = match.replace(/<text[^>]*>(.*?)<\/text>/s, '$1').trim();
-        // Remove potential timestamp patterns at the start
-        text = text.replace(/^\s*\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\s*/, '');
-        if (text) {
+        let text = match.replace(/<text[^>]*>([^<]+)<\/text>/, '$1').trim();
+        // Remove potential [BLANK_AUDIO] or empty
+        if (text && !text.includes('[BLANK_AUDIO]')) {
           texts.push(text);
         }
       });
@@ -140,28 +118,32 @@ async function handleRequest(request) {
       throw new Error('No transcript text found');
     }
     
-    return new Response(JSON.stringify({
+    return jsonResponse({
       status_code: 200,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      response: transcript
-    }), {
-      status: 200,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=3600'
-      }
-    })
+      response: transcript,
+      language: language,
+      video_id: videoId
+    }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
-    return new Response(JSON.stringify({
+    const isTimeout = error.name === 'AbortError' || error.message.includes('timeout');
+    
+    return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      message: `Error getting transcript: ${error.message}`
-    }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    })
+      message: isTimeout ? 'Request timeout. Please try again' : `Error getting transcript: ${error.message}`
+    }, 400)
   }
+}
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      ...extraHeaders
+    }
+  })
 }
