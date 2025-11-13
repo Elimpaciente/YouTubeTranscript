@@ -18,7 +18,6 @@ async function handleRequest(request) {
   const videoIdParam = url.searchParams.get('video_id')
   const language = url.searchParams.get('language') || 'en'
   
-  // Si no hay parámetros, mostrar error
   if (!youtubeUrl && !videoIdParam) {
     return jsonResponse({
       status_code: 400,
@@ -30,7 +29,6 @@ async function handleRequest(request) {
   
   let videoId = videoIdParam
   
-  // Extract video ID from URL if provided
   if (youtubeUrl && !videoId) {
     if (!youtubeUrl.trim()) {
       return jsonResponse({
@@ -77,12 +75,13 @@ async function handleRequest(request) {
     const transcript = await getYouTubeTranscript(videoId, language)
     const fullText = transcript.map(item => item.text).join(' ')
     
+    // La línea de caché ha sido eliminada de esta llamada a jsonResponse
     return jsonResponse({
       status_code: 200,
       response: fullText,
       developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 200, { 'Cache-Control': 'public, max-age=3600' })
+    }, 200)
     
   } catch (error) {
     return jsonResponse({
