@@ -18,7 +18,6 @@ async function handleRequest(request) {
   const videoIdParam = url.searchParams.get('video_id')
   const language = url.searchParams.get('language') || 'en'
   
-  // Si no hay parámetros, mostrar error
   if (!youtubeUrl && !videoIdParam) {
     return jsonResponse({
       status_code: 400,
@@ -30,7 +29,6 @@ async function handleRequest(request) {
   
   let videoId = videoIdParam
   
-  // Extract video ID from URL if provided
   if (youtubeUrl && !videoId) {
     if (!youtubeUrl.trim()) {
       return jsonResponse({
@@ -46,6 +44,8 @@ async function handleRequest(request) {
         videoId = new URL(youtubeUrl).searchParams.get('v')
       } else if (youtubeUrl.includes('youtu.be/')) {
         videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
+      } else if (youtubeUrl.includes('youtube.com/shorts/')) {
+        videoId = new URL(youtubeUrl).pathname.split('/')[2]
       } else {
         return jsonResponse({
           status_code: 400,
@@ -97,8 +97,11 @@ async function handleRequest(request) {
 async function getYouTubeTranscript(videoId, language = 'en') {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
   const keyResponse = await fetch(videoUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    signal: AbortSignal.timeout(30000)
+    headers: { 
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9'
+    },
+    signal: AbortSignal.timeout(45000)
   })
   
   if (!keyResponse.ok) {
@@ -112,9 +115,10 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   }
   
   const apiKey = apiKeyMatch[1]
-  
   const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
-  const clientVersions = ["20.45.34", "20.45.32"]
+  
+  // Updated client versions
+  const clientVersions = ["19.09.37", "19.09.36", "18.11.34", "17.31.35"]
   let playerResponse
   
   for (const version of clientVersions) {
@@ -122,10 +126,20 @@ async function getYouTubeTranscript(videoId, language = 'en') {
       context: {
         client: {
           clientName: "ANDROID",
-          clientVersion: version
+          clientVersion: version,
+          androidSdkVersion: 30,
+          userAgent: `com.google.android.youtube/${version} (Linux; U; Android 11) gzip`
         }
       },
-      videoId: videoId
+      videoId: videoId,
+      params: "CgIQBg==",
+      playbackContext: {
+        contentPlaybackContext: {
+          html5Preference: "HTML5_PREF_WANTS"
+        }
+      },
+      contentCheckOk: true,
+      racyCheckOk: true
     }
     
     try {
@@ -133,15 +147,19 @@ async function getYouTubeTranscript(videoId, language = 'en') {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          'User-Agent': `com.google.android.youtube/${version} (Linux; U; Android 11) gzip`,
+          'X-YouTube-Client-Name': '3',
+          'X-YouTube-Client-Version': version
         },
         body: JSON.stringify(playerBody),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(45000)
       })
       
       if (response.ok) {
         playerResponse = await response.json()
-        break
+        if (playerResponse.captions) {
+          break
+        }
       }
     } catch (err) {
       continue
@@ -161,21 +179,37 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   
   let track = tracks.find(t => t.languageCode === language)
   if (!track) {
+    track = tracks.find(t => t.languageCode.startsWith(language.split('-')[0]))
+  }
+  if (!track) {
     track = tracks[0]
   }
   
-  let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
-  const captionsResponse = await fetch(baseUrl, {
+  // Use JSON format instead of XML for better reliability
+  let captionsUrl = track.baseUrl
+  if (!captionsUrl.includes('fmt=json3')) {
+    captionsUrl = captionsUrl.replace(/&fmt=\w+/, '') + '&fmt=json3'
+  }
+  
+  const captionsResponse = await fetch(captionsUrl, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(45000)
   })
   
   if (!captionsResponse.ok) {
     throw new Error('Failed to fetch captions')
   }
   
-  const captionsXml = await captionsResponse.text()
-  const transcript = parseCaptionsXml(captionsXml)
+  const contentType = captionsResponse.headers.get('content-type')
+  let transcript
+  
+  if (contentType && contentType.includes('json')) {
+    const captionsJson = await captionsResponse.json()
+    transcript = parseCaptionsJson(captionsJson)
+  } else {
+    const captionsXml = await captionsResponse.text()
+    transcript = parseCaptionsXml(captionsXml)
+  }
   
   if (transcript.length === 0) {
     throw new Error('No transcript found')
@@ -186,20 +220,53 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   return transcript
 }
 
+function parseCaptionsJson(jsonData) {
+  const captions = []
+  
+  if (!jsonData.events) {
+    return captions
+  }
+  
+  for (const event of jsonData.events) {
+    if (!event.segs) continue
+    
+    const startTime = event.tStartMs / 1000
+    const duration = event.dDurationMs / 1000
+    
+    let text = event.segs
+      .map(seg => seg.utf8 || '')
+      .join('')
+      .replace(/\n/g, ' ')
+      .trim()
+    
+    if (text && !text.includes('[BLANK_AUDIO]')) {
+      captions.push({
+        startTime,
+        duration,
+        text
+      })
+    }
+  }
+  
+  return captions
+}
+
 function parseCaptionsXml(xmlContent) {
   const captions = []
-  const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
+  const pattern = /<text start="([^"]+)" dur="([^"]+)"[^>]*>([^<]*(?:<[^>]+>[^<]*)*)<\/text>/g
   
   let match
   while ((match = pattern.exec(xmlContent)) !== null) {
     const startTime = parseFloat(match[1])
     const duration = parseFloat(match[2])
     let text = match[3]
+      .replace(/<[^>]+>/g, '')
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
       .replace(/\n/g, ' ')
       .trim()
     
