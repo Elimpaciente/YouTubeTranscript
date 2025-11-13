@@ -5,77 +5,110 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url)
   
-  // Only accept GET requests
   if (request.method !== 'GET') {
-    return jsonResponse({
+    return new Response(JSON.stringify({
       status_code: 400,
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'Only GET requests are allowed'
-    }, 400)
+    }), {
+      status: 400,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    })
   }
   
-  // Get URL parameter
   const youtubeUrl = url.searchParams.get('url')
   
-  // Validate parameter
   if (!youtubeUrl || youtubeUrl.trim() === '') {
-    return jsonResponse({
+    return new Response(JSON.stringify({
       status_code: 400,
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes',
       message: 'The url parameter is required'
-    }, 400)
+    }), {
+      status: 400,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    })
   }
   
-  // Validate YouTube URL format
   if (!youtubeUrl.includes('youtube.com/watch?v=') && !youtubeUrl.includes('youtu.be/')) {
-    return jsonResponse({
+    return new Response(JSON.stringify({
       status_code: 400,
-      message: 'Invalid YouTube URL. Please provide a valid YouTube video link'
-    }, 400)
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes',
+      message: 'Invalid YouTube URL format'
+    }), {
+      status: 400,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    })
   }
   
   try {
-    // Extract video ID
-    let videoId;
+    let videoId
     if (youtubeUrl.includes('youtube.com/watch?v=')) {
-      videoId = new URL(youtubeUrl).searchParams.get('v');
+      videoId = new URL(youtubeUrl).searchParams.get('v')
     } else if (youtubeUrl.includes('youtu.be/')) {
-      videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0];
+      videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
     }
     
     if (!videoId || videoId.trim() === '') {
-      return jsonResponse({
+      return new Response(JSON.stringify({
         status_code: 400,
-        message: 'Could not extract video ID from the URL'
-      }, 400)
+        developer: 'El Impaciente',
+        telegram_channel: 'https://t.me/Apisimpacientes',
+        message: 'Could not extract video ID from URL'
+      }), {
+        status: 400,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      })
     }
     
-    // Get transcript
     const transcript = await getYouTubeTranscript(videoId)
     const fullText = transcript.map(item => item.text).join(' ')
     
-    // Successful response
-    return jsonResponse({
+    return new Response(JSON.stringify({
       status_code: 200,
-      result: {
-        video_id: videoId,
-        language: transcript.language || 'en',
-        fragment_count: transcript.length,
-        full_text: fullText,
-        fragments: transcript
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes',
+      response: fullText
+    }), {
+      status: 200,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=3600',
+        'Access-Control-Allow-Origin': '*'
       }
-    }, 200, { 'Cache-Control': 'public, max-age=3600' })
+    })
     
   } catch (error) {
-    const isTimeout = error.name === 'AbortError' || error.message.includes('timeout')
-    
-    return jsonResponse({
+    return new Response(JSON.stringify({
       status_code: 400,
-      message: isTimeout ? 'Request timeout. Please try again' : error.message || 'Error processing the request. Please try again'
-    }, 400)
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes',
+      message: error.message || 'Error processing request'
+    }), {
+      status: 400,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    })
   }
 }
 
 async function getYouTubeTranscript(videoId, language = 'en') {
-  // Step 1: Get Innertube API Key
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
   const keyResponse = await fetch(videoUrl, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
@@ -94,10 +127,9 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   
   const apiKey = apiKeyMatch[1]
   
-  // Step 2: Get Player Response
   const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
   const clientVersions = ["20.45.34", "20.45.32"]
-  let playerResponse;
+  let playerResponse
   
   for (const version of clientVersions) {
     const playerBody = {
@@ -126,7 +158,7 @@ async function getYouTubeTranscript(videoId, language = 'en') {
         break
       }
     } catch (err) {
-      // Continue to next version
+      continue
     }
   }
   
@@ -153,15 +185,14 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   })
   
   if (!captionsResponse.ok) {
-    throw new Error('Failed to fetch captions XML')
+    throw new Error('Failed to fetch captions')
   }
   
   const captionsXml = await captionsResponse.text()
   const transcript = parseCaptionsXml(captionsXml)
-  transcript.language = track.languageCode
   
   if (transcript.length === 0) {
-    throw new Error('No transcript fragments extracted')
+    throw new Error('No transcript found')
   }
   
   return transcript
@@ -194,17 +225,4 @@ function parseCaptionsXml(xmlContent) {
   }
   
   return captions
-}
-
-function jsonResponse(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      ...extraHeaders
-    }
-  })
 }
