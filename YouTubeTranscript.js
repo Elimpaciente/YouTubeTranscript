@@ -4,6 +4,18 @@ addEventListener('fetch', event => {
 
 async function handleRequest(request) {
   const url = new URL(request.url)
+  
+  // Handle CORS preflight
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    })
+  }
+  
   if (request.method !== 'GET') {
     return jsonResponse({
       status_code: 400,
@@ -14,10 +26,12 @@ async function handleRequest(request) {
   }
   
   const path = url.pathname
+  
+  // Root endpoint - API info
   if (path === '/' || path === '') {
     return jsonResponse({
       name: "YouTube Transcript API",
-      version: "2.0.1",  // Actualizado para reflejar el fix
+      version: "2.0.1",
       developer: "El Impaciente",
       telegram_channel: "https://t.me/Apisimpacientes",
       description: "Extrae transcripciones de videos de YouTube",
@@ -27,11 +41,13 @@ async function handleRequest(request) {
       },
       examples: [
         "/transcript?url=https://www.youtube.com/watch?v=VIDEO_ID",
+        "/transcript?url=https://youtu.be/VIDEO_ID",
         "/transcript?video_id=VIDEO_ID&language=es"
       ]
     }, 200)
   }
   
+  // Health check endpoint
   if (path === '/health') {
     return jsonResponse({
       status: "ok",
@@ -40,13 +56,17 @@ async function handleRequest(request) {
     }, 200)
   }
   
+  // Transcript endpoint
   if (path === '/transcript') {
     return await handleTranscriptRequest(url)
   }
   
+  // 404 for unknown endpoints
   return jsonResponse({
     status_code: 404,
-    message: 'Endpoint not found'
+    developer: 'El Impaciente',
+    telegram_channel: 'https://t.me/Apisimpacientes',
+    message: 'Endpoint not found. Use /transcript or visit / for API info'
   }, 404)
 }
 
@@ -56,20 +76,37 @@ async function handleTranscriptRequest(url) {
   const language = url.searchParams.get('language') || 'en'
   
   let videoId = videoIdParam
+  
+  // Extract video ID from URL if provided
   if (youtubeUrl && !videoId) {
+    if (!youtubeUrl.trim()) {
+      return jsonResponse({
+        status_code: 400,
+        developer: 'El Impaciente',
+        telegram_channel: 'https://t.me/Apisimpacientes',
+        message: 'The url parameter cannot be empty'
+      }, 400)
+    }
+    
     try {
-      const urlObj = new URL(youtubeUrl)
-      if (urlObj.hostname.includes('youtube.com')) {
-        videoId = urlObj.searchParams.get('v')
-      } else if (urlObj.hostname.includes('youtu.be')) {
-        videoId = urlObj.pathname.slice(1).split('?')[0]
+      if (youtubeUrl.includes('youtube.com/watch?v=')) {
+        videoId = new URL(youtubeUrl).searchParams.get('v')
+      } else if (youtubeUrl.includes('youtu.be/')) {
+        videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
+      } else {
+        return jsonResponse({
+          status_code: 400,
+          developer: 'El Impaciente',
+          telegram_channel: 'https://t.me/Apisimpacientes',
+          message: 'Invalid YouTube URL format. Use youtube.com/watch?v= or youtu.be/ format'
+        }, 400)
       }
     } catch (e) {
       return jsonResponse({
         status_code: 400,
         developer: 'El Impaciente',
         telegram_channel: 'https://t.me/Apisimpacientes',
-        message: 'Invalid YouTube URL format'
+        message: 'Could not parse YouTube URL'
       }, 400)
     }
   }
@@ -79,7 +116,11 @@ async function handleTranscriptRequest(url) {
       status_code: 400,
       developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes',
-      message: 'The url or video_id parameter is required'
+      message: 'The url or video_id parameter is required',
+      examples: [
+        '/transcript?url=https://www.youtube.com/watch?v=VIDEO_ID',
+        '/transcript?video_id=VIDEO_ID'
+      ]
     }, 400)
   }
   
@@ -99,7 +140,6 @@ async function handleTranscriptRequest(url) {
     }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
-    console.error('DEBUG: Error en handleTranscriptRequest:', error.message);  // Log para debug
     return jsonResponse({
       status_code: 400,
       developer: 'El Impaciente',
@@ -111,97 +151,38 @@ async function handleTranscriptRequest(url) {
 }
 
 async function getYouTubeTranscript(videoId, language = 'en') {
-  try {
-    console.log('DEBUG: Iniciando getYouTubeTranscript para videoId:', videoId, 'language:', language);
-    const apiKey = await getInnertubeApiKey(videoId)
-    const playerResponse = await getPlayerResponse(videoId, apiKey)
-    if (!playerResponse.captions) {
-      throw new Error('No se encontraron subtítulos para este video')
-    }
-    
-    const captionsData = playerResponse.captions
-    const tracks = captionsData.playerCaptionsTracklistRenderer?.captionTracks || []
-    
-    if (tracks.length === 0) {
-      throw new Error('No hay pistas de subtítulos disponibles')
-    }
-    
-    let track = tracks.find(t => t.languageCode === language)
-    if (!track) {
-      track = tracks[0]
-      console.log('DEBUG: Fallback a track default:', track.languageCode)
-    } else {
-      console.log('DEBUG: Track encontrado para language:', language)
-    }
-    
-    let baseUrl = track.baseUrl
-    baseUrl = baseUrl.replace(/&fmt=\w+/, '')
-    console.log('DEBUG: Fetching captions XML:', baseUrl)
-    const captionsXml = await fetch(baseUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    }).then(r => r.text())
-    
-    const transcript = parseCaptionsXml(captionsXml)
-    transcript.language = track.languageCode
-    
-    if (transcript.length === 0) {
-      throw new Error('No se pudieron extraer fragmentos de subtítulos')
-    }
-    
-    console.log('DEBUG: Transcripción exitosa - Fragments:', transcript.length)
-    return transcript
-    
-  } catch (error) {
-    console.error('DEBUG: Error en getYouTubeTranscript:', error.message)
-    throw new Error(`Error al extraer transcripción: ${error.message}`)
-  }
-}
-
-async function getInnertubeApiKey(videoId) {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
-  console.log('DEBUG: Fetching API Key from:', videoUrl)
-  
-  const response = await fetch(videoUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+  const keyResponse = await fetch(videoUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    signal: AbortSignal.timeout(30000)
   })
   
-  if (!response.ok) {
-    console.error('DEBUG: GET API Key falló - Código:', response.status)
-    throw new Error('No se pudo acceder a la página del video')
+  if (!keyResponse.ok) {
+    throw new Error('Failed to access video page')
   }
   
-  const html = await response.text()
+  const html = await keyResponse.text()
   const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
-  
   if (!apiKeyMatch) {
-    console.error('DEBUG: No se encontró INNERTUBE_API_KEY en HTML')
-    throw new Error('No se encontró INNERTUBE_API_KEY en la página del video')
+    throw new Error('INNERTUBE_API_KEY not found')
   }
   
-  console.log('DEBUG: API Key obtenida (primeros 10 chars):', apiKeyMatch[1].substring(0, 10) + '...')
-  return apiKeyMatch[1]
-}
-
-async function getPlayerResponse(videoId, apiKey) {
-  const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
-  console.log('DEBUG: Iniciando POST a Player URL:', playerUrl)
+  const apiKey = apiKeyMatch[1]
   
-  // Versión actualizada a noviembre 2025
-  const clientVersions = ["20.45.34", "20.45.32"];  // Fallback si la primera falla
-  let lastError;
+  const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
+  const clientVersions = ["20.45.34", "20.45.32"]
+  let playerResponse
   
   for (const version of clientVersions) {
     const playerBody = {
       context: {
         client: {
           clientName: "ANDROID",
-          clientVersion: version  // ¡Aquí el cambio clave!
+          clientVersion: version
         }
       },
       videoId: videoId
     }
-    
-    console.log('DEBUG: Probando clientVersion:', version)
     
     try {
       const response = await fetch(playerUrl, {
@@ -210,44 +191,66 @@ async function getPlayerResponse(videoId, apiKey) {
           'Content-Type': 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         },
-        body: JSON.stringify(playerBody)
+        body: JSON.stringify(playerBody),
+        signal: AbortSignal.timeout(30000)
       })
       
-      console.log('DEBUG: POST código HTTP:', response.status)
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('DEBUG: POST error body (primeros 200 chars):', errorText.substring(0, 200))
-        lastError = new Error(`HTTP ${response.status}: ${errorText.substring(0, 100)}...`)
-        continue;  // Prueba la siguiente versión
+      if (response.ok) {
+        playerResponse = await response.json()
+        break
       }
-      
-      const data = await response.json()
-      console.log('DEBUG: PlayerResponse OK - Tiene captions?', !!data.captions)
-      return data;
-      
     } catch (err) {
-      console.error('DEBUG: Excepción en POST con version', version, ':', err.message)
-      lastError = err;
+      continue
     }
   }
   
-  // Si todas fallan
-  throw lastError || new Error('Error al obtener respuesta del reproductor con versiones disponibles')
+  if (!playerResponse || !playerResponse.captions) {
+    throw new Error('No captions available for this video')
+  }
+  
+  const captionsData = playerResponse.captions
+  const tracks = captionsData.playerCaptionsTracklistRenderer?.captionTracks || []
+  
+  if (tracks.length === 0) {
+    throw new Error('No caption tracks available')
+  }
+  
+  let track = tracks.find(t => t.languageCode === language)
+  if (!track) {
+    track = tracks[0]
+  }
+  
+  let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
+  const captionsResponse = await fetch(baseUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(30000)
+  })
+  
+  if (!captionsResponse.ok) {
+    throw new Error('Failed to fetch captions')
+  }
+  
+  const captionsXml = await captionsResponse.text()
+  const transcript = parseCaptionsXml(captionsXml)
+  
+  if (transcript.length === 0) {
+    throw new Error('No transcript found')
+  }
+  
+  transcript.language = track.languageCode
+  
+  return transcript
 }
 
 function parseCaptionsXml(xmlContent) {
-  console.log('DEBUG: Parsing XML de captions (longitud:', xmlContent.length, ')')
   const captions = []
   const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
   
   let match
-  let count = 0
   while ((match = pattern.exec(xmlContent)) !== null) {
     const startTime = parseFloat(match[1])
     const duration = parseFloat(match[2])
     let text = match[3]
-    text = text
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
@@ -262,11 +265,9 @@ function parseCaptionsXml(xmlContent) {
         duration,
         text
       })
-      count++
     }
   }
   
-  console.log('DEBUG: Parsing completado - Fragments válidos:', count)
   return captions
 }
 
