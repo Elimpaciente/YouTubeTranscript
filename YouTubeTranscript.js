@@ -120,14 +120,19 @@ async function handleRequest(request) {
     }
     const xml = await captionResponse.text();
     
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(xml, 'text/xml');
-    const texts = Array.from(doc.querySelectorAll('text')).map(t => {
-      let text = t.textContent.trim();
-      // Remove any potential timestamp patterns at the start (e.g., 00:00:01.000 )
-      text = text.replace(/^\d{2}:\d{2}:\d{2}(\.\d{3})?\s*/, '');
-      return text;
-    }).filter(t => t);
+    // Manual XML parsing for YouTube captions: extract text content between <text> tags
+    const texts = [];
+    const textMatches = xml.match(/<text[^>]*>(.*?)<\/text>/gs);
+    if (textMatches) {
+      textMatches.forEach(match => {
+        let text = match.replace(/<text[^>]*>(.*?)<\/text>/s, '$1').trim();
+        // Remove potential timestamp patterns at the start
+        text = text.replace(/^\s*\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\s*/, '');
+        if (text) {
+          texts.push(text);
+        }
+      });
+    }
     
     const transcript = texts.join(' ');
     
