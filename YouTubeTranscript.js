@@ -5,75 +5,28 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url)
   
-  // Handle CORS preflight
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
-      }
-    })
-  }
-  
   if (request.method !== 'GET') {
     return jsonResponse({
       status_code: 400,
+      message: 'Only GET requests are allowed',
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      message: 'Only GET requests are allowed'
+      telegram_channel: 'https://t.me/Apisimpacientes'
     }, 400)
   }
   
-  const path = url.pathname
-  
-  // Root endpoint - API info
-  if (path === '/' || path === '') {
-    return jsonResponse({
-      name: "YouTube Transcript API",
-      version: "2.0.1",
-      developer: "El Impaciente",
-      telegram_channel: "https://t.me/Apisimpacientes",
-      description: "Extrae transcripciones de videos de YouTube",
-      endpoints: {
-        "GET /transcript": "Obtiene la transcripción de un video (requiere parámetros: url o video_id, opcional: language)",
-        "GET /health": "Verifica el estado de la API"
-      },
-      examples: [
-        "/transcript?url=https://www.youtube.com/watch?v=VIDEO_ID",
-        "/transcript?url=https://youtu.be/VIDEO_ID",
-        "/transcript?video_id=VIDEO_ID&language=es"
-      ]
-    }, 200)
-  }
-  
-  // Health check endpoint
-  if (path === '/health') {
-    return jsonResponse({
-      status: "ok",
-      message: "API funcionando correctamente",
-      timestamp: new Date().toISOString()
-    }, 200)
-  }
-  
-  // Transcript endpoint
-  if (path === '/transcript') {
-    return await handleTranscriptRequest(url)
-  }
-  
-  // 404 for unknown endpoints
-  return jsonResponse({
-    status_code: 404,
-    developer: 'El Impaciente',
-    telegram_channel: 'https://t.me/Apisimpacientes',
-    message: 'Endpoint not found. Use /transcript or visit / for API info'
-  }, 404)
-}
-
-async function handleTranscriptRequest(url) {
   const youtubeUrl = url.searchParams.get('url')
   const videoIdParam = url.searchParams.get('video_id')
   const language = url.searchParams.get('language') || 'en'
+  
+  // Si no hay parámetros, mostrar error
+  if (!youtubeUrl && !videoIdParam) {
+    return jsonResponse({
+      status_code: 400,
+      message: 'The url or video_id parameter is required',
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes'
+    }, 400)
+  }
   
   let videoId = videoIdParam
   
@@ -82,9 +35,9 @@ async function handleTranscriptRequest(url) {
     if (!youtubeUrl.trim()) {
       return jsonResponse({
         status_code: 400,
+        message: 'The url parameter cannot be empty',
         developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes',
-        message: 'The url parameter cannot be empty'
+        telegram_channel: 'https://t.me/Apisimpacientes'
       }, 400)
     }
     
@@ -96,17 +49,17 @@ async function handleTranscriptRequest(url) {
       } else {
         return jsonResponse({
           status_code: 400,
+          message: 'Invalid YouTube URL format',
           developer: 'El Impaciente',
-          telegram_channel: 'https://t.me/Apisimpacientes',
-          message: 'Invalid YouTube URL format. Use youtube.com/watch?v= or youtu.be/ format'
+          telegram_channel: 'https://t.me/Apisimpacientes'
         }, 400)
       }
     } catch (e) {
       return jsonResponse({
         status_code: 400,
+        message: 'Could not parse YouTube URL',
         developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes',
-        message: 'Could not parse YouTube URL'
+        telegram_channel: 'https://t.me/Apisimpacientes'
       }, 400)
     }
   }
@@ -114,13 +67,9 @@ async function handleTranscriptRequest(url) {
   if (!videoId || videoId.trim() === '') {
     return jsonResponse({
       status_code: 400,
+      message: 'Could not extract video ID from URL',
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      message: 'The url or video_id parameter is required',
-      examples: [
-        '/transcript?url=https://www.youtube.com/watch?v=VIDEO_ID',
-        '/transcript?video_id=VIDEO_ID'
-      ]
+      telegram_channel: 'https://t.me/Apisimpacientes'
     }, 400)
   }
   
@@ -130,18 +79,17 @@ async function handleTranscriptRequest(url) {
     
     return jsonResponse({
       status_code: 200,
+      response: fullText,
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      response: fullText
+      telegram_channel: 'https://t.me/Apisimpacientes'
     }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
     return jsonResponse({
       status_code: 400,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
       message: error.message || 'Error processing request',
-      video_id: videoId
+      developer: 'El Impaciente',
+      telegram_channel: 'https://t.me/Apisimpacientes'
     }, 400)
   }
 }
@@ -273,7 +221,7 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET',
       'Access-Control-Allow-Headers': 'Content-Type',
       ...extraHeaders
     }
