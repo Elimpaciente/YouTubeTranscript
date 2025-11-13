@@ -17,7 +17,7 @@ async function handleRequest(request) {
   if (path === '/' || path === '') {
     return jsonResponse({
       name: "YouTube Transcript API",
-      version: "2.0.0",
+      version: "2.0.1",  // Actualizado para reflejar el fix
       developer: "El Impaciente",
       telegram_channel: "https://t.me/Apisimpacientes",
       description: "Extrae transcripciones de videos de YouTube",
@@ -99,6 +99,7 @@ async function handleTranscriptRequest(url) {
     }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
+    console.error('DEBUG: Error en handleTranscriptRequest:', error.message);  // Log para debug
     return jsonResponse({
       status_code: 400,
       developer: 'El Impaciente',
@@ -111,6 +112,7 @@ async function handleTranscriptRequest(url) {
 
 async function getYouTubeTranscript(videoId, language = 'en') {
   try {
+    console.log('DEBUG: Iniciando getYouTubeTranscript para videoId:', videoId, 'language:', language);
     const apiKey = await getInnertubeApiKey(videoId)
     const playerResponse = await getPlayerResponse(videoId, apiKey)
     if (!playerResponse.captions) {
@@ -127,10 +129,14 @@ async function getYouTubeTranscript(videoId, language = 'en') {
     let track = tracks.find(t => t.languageCode === language)
     if (!track) {
       track = tracks[0]
+      console.log('DEBUG: Fallback a track default:', track.languageCode)
+    } else {
+      console.log('DEBUG: Track encontrado para language:', language)
     }
     
     let baseUrl = track.baseUrl
     baseUrl = baseUrl.replace(/&fmt=\w+/, '')
+    console.log('DEBUG: Fetching captions XML:', baseUrl)
     const captionsXml = await fetch(baseUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0' }
     }).then(r => r.text())
@@ -142,21 +148,25 @@ async function getYouTubeTranscript(videoId, language = 'en') {
       throw new Error('No se pudieron extraer fragmentos de subtítulos')
     }
     
+    console.log('DEBUG: Transcripción exitosa - Fragments:', transcript.length)
     return transcript
     
   } catch (error) {
+    console.error('DEBUG: Error en getYouTubeTranscript:', error.message)
     throw new Error(`Error al extraer transcripción: ${error.message}`)
   }
 }
 
 async function getInnertubeApiKey(videoId) {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
+  console.log('DEBUG: Fetching API Key from:', videoUrl)
   
   const response = await fetch(videoUrl, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
   })
   
   if (!response.ok) {
+    console.error('DEBUG: GET API Key falló - Código:', response.status)
     throw new Error('No se pudo acceder a la página del video')
   }
   
@@ -164,46 +174,75 @@ async function getInnertubeApiKey(videoId) {
   const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
   
   if (!apiKeyMatch) {
+    console.error('DEBUG: No se encontró INNERTUBE_API_KEY en HTML')
     throw new Error('No se encontró INNERTUBE_API_KEY en la página del video')
   }
   
+  console.log('DEBUG: API Key obtenida (primeros 10 chars):', apiKeyMatch[1].substring(0, 10) + '...')
   return apiKeyMatch[1]
 }
 
 async function getPlayerResponse(videoId, apiKey) {
   const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
+  console.log('DEBUG: Iniciando POST a Player URL:', playerUrl)
   
-  const playerBody = {
-    context: {
-      client: {
-        clientName: "ANDROID",
-        clientVersion: "20.10.38"
+  // Versión actualizada a noviembre 2025
+  const clientVersions = ["20.45.34", "20.45.32"];  // Fallback si la primera falla
+  let lastError;
+  
+  for (const version of clientVersions) {
+    const playerBody = {
+      context: {
+        client: {
+          clientName: "ANDROID",
+          clientVersion: version  // ¡Aquí el cambio clave!
+        }
+      },
+      videoId: videoId
+    }
+    
+    console.log('DEBUG: Probando clientVersion:', version)
+    
+    try {
+      const response = await fetch(playerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        body: JSON.stringify(playerBody)
+      })
+      
+      console.log('DEBUG: POST código HTTP:', response.status)
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('DEBUG: POST error body (primeros 200 chars):', errorText.substring(0, 200))
+        lastError = new Error(`HTTP ${response.status}: ${errorText.substring(0, 100)}...`)
+        continue;  // Prueba la siguiente versión
       }
-    },
-    videoId: videoId
+      
+      const data = await response.json()
+      console.log('DEBUG: PlayerResponse OK - Tiene captions?', !!data.captions)
+      return data;
+      
+    } catch (err) {
+      console.error('DEBUG: Excepción en POST con version', version, ':', err.message)
+      lastError = err;
+    }
   }
   
-  const response = await fetch(playerUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    },
-    body: JSON.stringify(playerBody)
-  })
-  
-  if (!response.ok) {
-    throw new Error('Error al obtener respuesta del reproductor')
-  }
-  
-  return await response.json()
+  // Si todas fallan
+  throw lastError || new Error('Error al obtener respuesta del reproductor con versiones disponibles')
 }
 
 function parseCaptionsXml(xmlContent) {
+  console.log('DEBUG: Parsing XML de captions (longitud:', xmlContent.length, ')')
   const captions = []
   const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
   
   let match
+  let count = 0
   while ((match = pattern.exec(xmlContent)) !== null) {
     const startTime = parseFloat(match[1])
     const duration = parseFloat(match[2])
@@ -223,9 +262,11 @@ function parseCaptionsXml(xmlContent) {
         duration,
         text
       })
+      count++
     }
   }
   
+  console.log('DEBUG: Parsing completado - Fragments válidos:', count)
   return captions
 }
 
