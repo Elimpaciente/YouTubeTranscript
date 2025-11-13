@@ -5,6 +5,7 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url)
   
+  // Only accept GET requests
   if (request.method !== 'GET') {
     return jsonResponse({
       status_code: 400,
@@ -12,127 +13,187 @@ async function handleRequest(request) {
     }, 400)
   }
   
-  const ytUrl = url.searchParams.get('url')
+  // Get URL parameter
+  const youtubeUrl = url.searchParams.get('url')
   
-  if (!ytUrl || ytUrl.trim() === '') {
+  // Validate parameter
+  if (!youtubeUrl || youtubeUrl.trim() === '') {
     return jsonResponse({
       status_code: 400,
       message: 'The url parameter is required'
     }, 400)
   }
   
-  try {
-    new URL(ytUrl)
-  } catch (e) {
+  // Validate YouTube URL format
+  if (!youtubeUrl.includes('youtube.com/watch?v=') && !youtubeUrl.includes('youtu.be/')) {
     return jsonResponse({
       status_code: 400,
-      message: 'Invalid URL format'
-    }, 400)
-  }
-  
-  if (!ytUrl.includes('youtube.com') && !ytUrl.includes('youtu.be')) {
-    return jsonResponse({
-      status_code: 400,
-      message: 'URL must be a YouTube video'
-    }, 400)
-  }
-  
-  let videoId;
-  try {
-    if (ytUrl.includes('youtu.be/')) {
-      videoId = ytUrl.split('youtu.be/')[1].split(/[?#]/)[0];
-    } else {
-      const urlObj = new URL(ytUrl);
-      videoId = urlObj.searchParams.get('v');
-    }
-    if (!videoId || videoId.length < 11) {
-      throw new Error();
-    }
-  } catch (e) {
-    return jsonResponse({
-      status_code: 400,
-      message: 'Invalid YouTube video ID'
+      message: 'Invalid YouTube URL. Please provide a valid YouTube video link'
     }, 400)
   }
   
   try {
-    const pageResponse = await fetch(ytUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: AbortSignal.timeout(30000)
-    });
-    if (!pageResponse.ok) {
-      throw new Error('Failed to fetch video page');
-    }
-    const html = await pageResponse.text();
-    
-    // Improved regex to capture full player response (non-greedy until matching })
-    const match = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]*?\});/);
-    if (!match) {
-      throw new Error('Could not find player response');
-    }
-    const playerResponse = JSON.parse(match[1]);
-    
-    const captionTracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (!captionTracks || captionTracks.length === 0) {
-      throw new Error('No captions available');
+    // Extract video ID
+    let videoId;
+    if (youtubeUrl.includes('youtube.com/watch?v=')) {
+      videoId = new URL(youtubeUrl).searchParams.get('v');
+    } else if (youtubeUrl.includes('youtu.be/')) {
+      videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0];
     }
     
-    const language = url.searchParams.get('language') || 'en';
-    let captionUrl = captionTracks[0].baseUrl;
-    for (let track of captionTracks) {
-      if (track.languageCode === language) {
-        captionUrl = track.baseUrl;
-        break;
-      }
+    if (!videoId || videoId.trim() === '') {
+      return jsonResponse({
+        status_code: 400,
+        message: 'Could not extract video ID from the URL'
+      }, 400)
     }
     
-    const captionResponse = await fetch(captionUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: AbortSignal.timeout(30000)
-    });
-    if (!captionResponse.ok) {
-      throw new Error('Failed to fetch captions');
-    }
-    const xml = await captionResponse.text();
+    // Get transcript
+    const transcript = await getYouTubeTranscript(videoId)
+    const fullText = transcript.map(item => item.text).join(' ')
     
-    // Improved XML parsing: extract text with timestamps and clean
-    const texts = [];
-    const textMatches = xml.match(/<text start="[^"]+" dur="[^"]+">([^<]+)<\/text>/g);
-    if (textMatches) {
-      textMatches.forEach(match => {
-        let text = match.replace(/<text[^>]*>([^<]+)<\/text>/, '$1').trim();
-        // Remove potential [BLANK_AUDIO] or empty
-        if (text && !text.includes('[BLANK_AUDIO]')) {
-          texts.push(text);
-        }
-      });
-    }
-    
-    const transcript = texts.join(' ');
-    
-    if (!transcript) {
-      throw new Error('No transcript text found');
-    }
-    
+    // Successful response
     return jsonResponse({
       status_code: 200,
-      response: transcript,
-      language: language,
-      video_id: videoId
+      result: {
+        video_id: videoId,
+        language: transcript.language || 'en',
+        fragment_count: transcript.length,
+        full_text: fullText,
+        fragments: transcript
+      }
     }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
-    const isTimeout = error.name === 'AbortError' || error.message.includes('timeout');
+    const isTimeout = error.name === 'AbortError' || error.message.includes('timeout')
     
     return jsonResponse({
       status_code: 400,
-      message: isTimeout ? 'Request timeout. Please try again' : `Error getting transcript: ${error.message}`
+      message: isTimeout ? 'Request timeout. Please try again' : error.message || 'Error processing the request. Please try again'
     }, 400)
   }
+}
+
+async function getYouTubeTranscript(videoId, language = 'en') {
+  // Step 1: Get Innertube API Key
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
+  const keyResponse = await fetch(videoUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    signal: AbortSignal.timeout(30000)
+  })
+  
+  if (!keyResponse.ok) {
+    throw new Error('Failed to access video page')
+  }
+  
+  const html = await keyResponse.text()
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
+  if (!apiKeyMatch) {
+    throw new Error('INNERTUBE_API_KEY not found')
+  }
+  
+  const apiKey = apiKeyMatch[1]
+  
+  // Step 2: Get Player Response
+  const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
+  const clientVersions = ["20.45.34", "20.45.32"]
+  let playerResponse;
+  
+  for (const version of clientVersions) {
+    const playerBody = {
+      context: {
+        client: {
+          clientName: "ANDROID",
+          clientVersion: version
+        }
+      },
+      videoId: videoId
+    }
+    
+    try {
+      const response = await fetch(playerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        body: JSON.stringify(playerBody),
+        signal: AbortSignal.timeout(30000)
+      })
+      
+      if (response.ok) {
+        playerResponse = await response.json()
+        break
+      }
+    } catch (err) {
+      // Continue to next version
+    }
+  }
+  
+  if (!playerResponse || !playerResponse.captions) {
+    throw new Error('No captions available for this video')
+  }
+  
+  const captionsData = playerResponse.captions
+  const tracks = captionsData.playerCaptionsTracklistRenderer?.captionTracks || []
+  
+  if (tracks.length === 0) {
+    throw new Error('No caption tracks available')
+  }
+  
+  let track = tracks.find(t => t.languageCode === language)
+  if (!track) {
+    track = tracks[0]
+  }
+  
+  let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
+  const captionsResponse = await fetch(baseUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(30000)
+  })
+  
+  if (!captionsResponse.ok) {
+    throw new Error('Failed to fetch captions XML')
+  }
+  
+  const captionsXml = await captionsResponse.text()
+  const transcript = parseCaptionsXml(captionsXml)
+  transcript.language = track.languageCode
+  
+  if (transcript.length === 0) {
+    throw new Error('No transcript fragments extracted')
+  }
+  
+  return transcript
+}
+
+function parseCaptionsXml(xmlContent) {
+  const captions = []
+  const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
+  
+  let match
+  while ((match = pattern.exec(xmlContent)) !== null) {
+    const startTime = parseFloat(match[1])
+    const duration = parseFloat(match[2])
+    let text = match[3]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n/g, ' ')
+      .trim()
+    
+    if (text && !text.includes('[BLANK_AUDIO]')) {
+      captions.push({
+        startTime,
+        duration,
+        text
+      })
+    }
+  }
+  
+  return captions
 }
 
 function jsonResponse(data, status = 200, extraHeaders = {}) {
