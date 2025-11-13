@@ -132,11 +132,7 @@ async function handleTranscriptRequest(url) {
       status_code: 200,
       developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes',
-      video_id: videoId,
-      language: transcript.language || language,
-      fragment_count: transcript.length,
-      response: fullText,
-      fragments: transcript
+      response: fullText
     }, 200, { 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
