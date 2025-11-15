@@ -16,7 +16,7 @@ async function handleRequest(request) {
   
   const youtubeUrl = url.searchParams.get('url')
   const videoIdParam = url.searchParams.get('video_id')
-  const language = url.searchParams.get('language') || 'en'
+  const language = url.searchParams.get('language') || null // null = automático
   
   if (!youtubeUrl && !videoIdParam) {
     return jsonResponse({
@@ -61,8 +61,8 @@ async function handleRequest(request) {
   }
   
   try {
-    const transcript = await getYouTubeTranscript(videoId, language)
-    const fullText = transcript.map(item => item.text).join(' ')
+    const result = await getYouTubeTranscript(videoId, language)
+    const fullText = result.transcript.map(item => item.text).join(' ')
     
     return jsonResponse({
       status_code: 200,
@@ -99,7 +99,7 @@ function extractVideoId(url) {
   throw new Error('Invalid YouTube URL format')
 }
 
-async function getYouTubeTranscript(videoId, language = 'en') {
+async function getYouTubeTranscript(videoId, language = null) {
   // Intentar múltiples métodos en orden
   const methods = [
     () => getTranscriptMethod1(videoId, language),
@@ -112,7 +112,7 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   for (const method of methods) {
     try {
       const result = await method()
-      if (result && result.length > 0) {
+      if (result && result.transcript && result.transcript.length > 0) {
         return result
       }
     } catch (error) {
@@ -171,8 +171,7 @@ async function getTranscriptMethod1(videoId, language) {
         context: {
           client: {
             clientName: client.name,
-            clientVersion: client.version,
-            hl: language
+            clientVersion: client.version
           }
         },
         videoId: videoId
@@ -197,7 +196,11 @@ async function getTranscriptMethod1(videoId, language) {
       }
       
       const tracks = playerData.captions.playerCaptionsTracklistRenderer.captionTracks
-      let track = tracks.find(t => t.languageCode === language) || tracks[0]
+      
+      // Si se especificó idioma, buscar ese. Si no, tomar el primero disponible
+      let track = language 
+        ? tracks.find(t => t.languageCode === language) || tracks[0]
+        : tracks[0]
       
       if (!track) continue
       
@@ -213,7 +216,11 @@ async function getTranscriptMethod1(videoId, language) {
       const transcript = parseCaptionsXml(captionsXml)
       
       if (transcript.length > 0) {
-        return transcript
+        return {
+          transcript: transcript,
+          language: track.languageCode,
+          languageName: track.name?.simpleText || track.languageCode
+        }
       }
     } catch (error) {
       continue
@@ -225,9 +232,10 @@ async function getTranscriptMethod1(videoId, language) {
 
 // Método 2: Endpoint alternativo de timedtext
 async function getTranscriptMethod2(videoId, language) {
-  const langs = [language, 'en', 'es']
+  // Si no se especifica idioma, probar los más comunes
+  const langsToTry = language ? [language] : ['en', 'es', 'pt', 'fr', 'de', 'it', 'ja', 'ko']
   
-  for (const lang of langs) {
+  for (const lang of langsToTry) {
     try {
       const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${lang}&fmt=srv3`
       
@@ -246,7 +254,11 @@ async function getTranscriptMethod2(videoId, language) {
       if (xml.includes('<?xml')) {
         const transcript = parseCaptionsXml(xml)
         if (transcript.length > 0) {
-          return transcript
+          return {
+            transcript: transcript,
+            language: lang,
+            languageName: lang
+          }
         }
       }
     } catch (error) {
@@ -273,11 +285,21 @@ async function getTranscriptMethod3(videoId, language) {
     
     const html = await response.text()
     
-    // Buscar captionsUrl en el embed
-    const captionUrlMatch = html.match(/"captionTracks":\[{"baseUrl":"([^"]+)"/i)
-    if (!captionUrlMatch) throw new Error('No caption URL found')
+    // Buscar captionTracks en el embed
+    const captionTracksMatch = html.match(/"captionTracks":\[([^\]]+)\]/i)
+    if (!captionTracksMatch) throw new Error('No caption tracks found')
     
-    const captionsUrl = captionUrlMatch[1].replace(/\\u0026/g, '&')
+    const tracksJson = `[${captionTracksMatch[1]}]`
+    const tracks = JSON.parse(tracksJson)
+    
+    // Si se especifica idioma, buscar ese. Si no, tomar el primero
+    let track = language
+      ? tracks.find(t => t.languageCode === language) || tracks[0]
+      : tracks[0]
+    
+    if (!track) throw new Error('No suitable track found')
+    
+    const captionsUrl = track.baseUrl.replace(/\\u0026/g, '&')
     const captionsResponse = await fetch(captionsUrl, {
       signal: AbortSignal.timeout(15000)
     })
@@ -288,7 +310,11 @@ async function getTranscriptMethod3(videoId, language) {
     const transcript = parseCaptionsXml(xml)
     
     if (transcript.length > 0) {
-      return transcript
+      return {
+        transcript: transcript,
+        language: track.languageCode,
+        languageName: track.name?.simpleText || track.languageCode
+      }
     }
   } catch (error) {
     throw new Error('Method 3 failed')
