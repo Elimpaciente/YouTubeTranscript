@@ -1,6 +1,6 @@
 /**
- * SOLUCIÓN DEFINITIVA - Basado en youtube-transcript de Kakulukian
- * Código adaptado específicamente para Cloudflare Workers
+ * SOLUCIÓN DEFINITIVA 2025 - Usando Innertube API con Android client
+ * Basado en el método más actual que funciona
  */
 
 export default {
@@ -28,7 +28,7 @@ export default {
         return jsonError('URL o video_id requerido', 400, corsHeaders);
       }
 
-      const transcript = await fetchTranscript(vid, lang);
+      const transcript = await getYoutubeTranscript(vid, lang);
 
       return new Response(JSON.stringify({
         status_code: 200,
@@ -38,6 +38,7 @@ export default {
       }), { status: 200, headers: corsHeaders });
 
     } catch (error) {
+      console.error('Error:', error);
       return jsonError(error.message || 'No captions available for this video', 400, corsHeaders);
     }
   }
@@ -52,101 +53,128 @@ function jsonError(message, status, headers) {
   }), { status, headers });
 }
 
-// Constantes
-const RE_YOUTUBE = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36,gzip(gfe)';
-const RE_XML_TRANSCRIPT = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
-
 function extractVideoId(url) {
   if (!url) return null;
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
+    /^([a-zA-Z0-9_-]{11})$/
+  ];
   
-  const match = url.match(RE_YOUTUBE);
-  return match ? match[1] : url.match(/^[a-zA-Z0-9_-]{11}$/) ? url : null;
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
 }
 
-async function fetchTranscript(videoId, lang) {
-  // Paso 1: Obtener la página del video
-  const videoPageResponse = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+// PASO 1: Obtener el API Key de Innertube desde el HTML
+async function getInnertubeApiKey(videoId) {
+  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
     headers: {
-      'Accept-Language': lang,
-      'User-Agent': USER_AGENT,
-    },
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+    }
   });
 
-  if (!videoPageResponse.ok) {
+  if (!response.ok) {
     throw new Error('Failed to fetch video page');
   }
 
-  const videoPageBody = await videoPageResponse.text();
-
-  // Paso 2: Extraer información de captions
-  const splittedHTML = videoPageBody.split('"captions":');
-
-  if (splittedHTML.length <= 1) {
-    if (videoPageBody.includes('class="g-recaptcha"')) {
-      throw new Error('Too many requests - CAPTCHA required');
-    }
-    if (!videoPageBody.includes('"playabilityStatus":')) {
-      throw new Error('Video unavailable');
-    }
-    throw new Error('Transcripts disabled for this video');
+  const html = await response.text();
+  
+  // Buscar INNERTUBE_API_KEY
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+  if (!apiKeyMatch) {
+    throw new Error('Could not extract API key');
   }
 
-  // Paso 3: Parsear JSON de captions
-  let captions;
-  try {
-    const captionsJSON = splittedHTML[1].split(',"videoDetails')[0].replace(/\n/g, '');
-    captions = JSON.parse(captionsJSON)?.playerCaptionsTracklistRenderer;
-  } catch (e) {
-    throw new Error('Failed to parse captions data');
+  return apiKeyMatch[1];
+}
+
+// PASO 2: Usar Innertube Player API con contexto Android
+async function getPlayerResponse(videoId, apiKey) {
+  const endpoint = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`;
+  
+  const body = {
+    context: {
+      client: {
+        clientName: 'ANDROID',
+        clientVersion: '19.09.37',
+        androidSdkVersion: 30,
+        hl: 'en',
+        gl: 'US',
+      }
+    },
+    videoId: videoId
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+      'X-YouTube-Client-Name': '3',
+      'X-YouTube-Client-Version': '19.09.37'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to get player response');
   }
 
-  if (!captions) {
-    throw new Error('Captions not found');
-  }
+  return await response.json();
+}
 
-  if (!captions.captionTracks || captions.captionTracks.length === 0) {
+// PASO 3: Extraer caption tracks del player response
+function getCaptionTracks(playerResponse) {
+  const captions = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  
+  if (!captions || captions.length === 0) {
     throw new Error('No captions available for this video');
   }
 
-  // Paso 4: Seleccionar el track de idioma correcto
-  let selectedTrack = captions.captionTracks.find(track => track.languageCode === lang);
+  return captions;
+}
+
+// PASO 4: Seleccionar el track apropiado
+function selectCaptionTrack(captionTracks, lang) {
+  // Intentar encontrar el idioma exacto
+  let track = captionTracks.find(t => t.languageCode === lang);
   
-  // Si no hay en el idioma solicitado, buscar español o el primero disponible
-  if (!selectedTrack) {
-    selectedTrack = captions.captionTracks.find(track => track.languageCode?.startsWith('es')) 
-                 || captions.captionTracks[0];
+  // Si no, buscar uno que empiece con el código de idioma
+  if (!track) {
+    track = captionTracks.find(t => t.languageCode?.startsWith(lang.split('-')[0]));
   }
-
-  if (!selectedTrack || !selectedTrack.baseUrl) {
-    throw new Error('No suitable caption track found');
-  }
-
-  // Paso 5: Obtener el transcript XML
-  const transcriptURL = selectedTrack.baseUrl;
-  const transcriptResponse = await fetch(transcriptURL, {
-    headers: {
-      'Accept-Language': lang,
-      'User-Agent': USER_AGENT,
-    },
-  });
-
-  if (!transcriptResponse.ok) {
-    throw new Error('Failed to fetch transcript');
-  }
-
-  const transcriptBody = await transcriptResponse.text();
-
-  // Paso 6: Parsear el XML y extraer texto
-  const results = [...transcriptBody.matchAll(RE_XML_TRANSCRIPT)];
   
-  if (results.length === 0) {
-    throw new Error('No transcript text found');
+  // Si aún no, tomar el primero disponible
+  if (!track) {
+    track = captionTracks[0];
   }
 
-  // Convertir a texto limpio
-  const fullText = results.map(result => {
-    let text = result[3];
+  return track;
+}
+
+// PASO 5: Descargar y parsear el XML de subtítulos
+async function downloadAndParseTranscript(baseUrl) {
+  const response = await fetch(baseUrl);
+  
+  if (!response.ok) {
+    throw new Error('Failed to download transcript');
+  }
+
+  const xml = await response.text();
+  return parseTranscriptXML(xml);
+}
+
+// PASO 6: Parsear el XML
+function parseTranscriptXML(xml) {
+  const regex = /<text start="([^"]*)" dur="([^"]*)"[^>]*>([^<]*)<\/text>/g;
+  const captions = [];
+  let match;
+
+  while ((match = regex.exec(xml)) !== null) {
+    let text = match[3];
     
     // Decodificar entidades HTML
     text = text
@@ -155,12 +183,74 @@ async function fetchTranscript(videoId, lang) {
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
       .replace(/&nbsp;/g, ' ')
       .replace(/\n/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
     
-    return text;
-  }).filter(Boolean).join(' ');
+    if (text) {
+      captions.push(text);
+    }
+  }
 
-  return fullText;
+  if (captions.length === 0) {
+    throw new Error('No text found in transcript');
+  }
+
+  return captions.join(' ');
+}
+
+// FUNCIÓN PRINCIPAL
+async function getYoutubeTranscript(videoId, lang = 'es') {
+  try {
+    // 1. Obtener API key
+    const apiKey = await getInnertubeApiKey(videoId);
+    
+    // 2. Obtener player response con contexto Android
+    const playerResponse = await getPlayerResponse(videoId, apiKey);
+    
+    // 3. Extraer caption tracks
+    const captionTracks = getCaptionTracks(playerResponse);
+    
+    // 4. Seleccionar el track apropiado
+    const selectedTrack = selectCaptionTrack(captionTracks, lang);
+    
+    // 5. Descargar y parsear
+    const transcript = await downloadAndParseTranscript(selectedTrack.baseUrl);
+    
+    return transcript;
+    
+  } catch (error) {
+    // Si el método Android falla, intentar método alternativo
+    try {
+      return await getTranscriptFallback(videoId, lang);
+    } catch (fallbackError) {
+      throw new Error(error.message);
+    }
+  }
+}
+
+// MÉTODO DE RESPALDO (usando el método anterior mejorado)
+async function getTranscriptFallback(videoId, lang) {
+  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept-Language': `${lang},en;q=0.9`,
+    }
+  });
+
+  const html = await response.text();
+  
+  // Buscar raw_player_response (método actualizado 2025)
+  const match = html.match(/"captions":\s*\{[^}]*"playerCaptionsTracklistRenderer":\s*\{[^}]*"captionTracks":\s*(\[[^\]]+\])/);
+  
+  if (!match) {
+    throw new Error('No captions found in fallback method');
+  }
+
+  const captionTracks = JSON.parse(match[1]);
+  const selectedTrack = selectCaptionTrack(captionTracks, lang);
+  
+  return await downloadAndParseTranscript(selectedTrack.baseUrl);
 }
