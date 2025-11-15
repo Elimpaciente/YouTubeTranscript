@@ -96,9 +96,8 @@ async function handleRequest(request) {
 
 async function getYouTubeTranscript(videoId, language = 'en') {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
-  const userAgent = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36'
   const keyResponse = await fetch(videoUrl, {
-    headers: { 'User-Agent': userAgent },
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
     signal: AbortSignal.timeout(30000)
   })
   
@@ -134,7 +133,7 @@ async function getYouTubeTranscript(videoId, language = 'en') {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': userAgent
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         },
         body: JSON.stringify(playerBody),
         signal: AbortSignal.timeout(30000)
@@ -167,7 +166,7 @@ async function getYouTubeTranscript(videoId, language = 'en') {
   
   let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
   const captionsResponse = await fetch(baseUrl, {
-    headers: { 'User-Agent': userAgent },
+    headers: { 'User-Agent': 'Mozilla/5.0' },
     signal: AbortSignal.timeout(30000)
   })
   
@@ -227,4 +226,4 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
       ...extraHeaders
     }
   })
-}
+    }
