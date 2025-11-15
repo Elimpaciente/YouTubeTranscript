@@ -1,11 +1,14 @@
-// SOLUCIÓN DEFINITIVA usando youtube-caption-extractor
-// Este paquete está diseñado específicamente para Cloudflare Workers
+/**
+ * SOLUCIÓN DEFINITIVA - Basado en youtube-transcript de Kakulukian
+ * Código adaptado específicamente para Cloudflare Workers
+ */
 
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     const videoUrl = url.searchParams.get('url');
     const videoId = url.searchParams.get('video_id');
+    const lang = url.searchParams.get('lang') || 'es';
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -19,19 +22,13 @@ export default {
     }
 
     try {
-      let vid = videoId || extractVideoId(videoUrl);
+      const vid = videoId || extractVideoId(videoUrl);
       
       if (!vid) {
-        return new Response(JSON.stringify({
-          status_code: 400,
-          message: 'URL o video_id requerido',
-          developer: 'El Impaciente',
-          telegram_channel: 'https://t.me/Apisimpacientes'
-        }), { status: 400, headers: corsHeaders });
+        return jsonError('URL o video_id requerido', 400, corsHeaders);
       }
 
-      // Usar youtube-caption-extractor
-      const transcript = await getYouTubeTranscript(vid);
+      const transcript = await fetchTranscript(vid, lang);
 
       return new Response(JSON.stringify({
         status_code: 200,
@@ -41,162 +38,129 @@ export default {
       }), { status: 200, headers: corsHeaders });
 
     } catch (error) {
-      return new Response(JSON.stringify({
-        status_code: 400,
-        message: error.message || 'No captions available for this video',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }), { status: 400, headers: corsHeaders });
+      return jsonError(error.message || 'No captions available for this video', 400, corsHeaders);
     }
   }
 };
 
+function jsonError(message, status, headers) {
+  return new Response(JSON.stringify({
+    status_code: status,
+    message: message,
+    developer: 'El Impaciente',
+    telegram_channel: 'https://t.me/Apisimpacientes'
+  }), { status, headers });
+}
+
+// Constantes
+const RE_YOUTUBE = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36,gzip(gfe)';
+const RE_XML_TRANSCRIPT = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
+
 function extractVideoId(url) {
   if (!url) return null;
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
-    /^([a-zA-Z0-9_-]{11})$/
-  ];
   
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
+  const match = url.match(RE_YOUTUBE);
+  return match ? match[1] : url.match(/^[a-zA-Z0-9_-]{11}$/) ? url : null;
 }
 
-// Función principal para obtener transcript
-async function getYouTubeTranscript(videoID, lang = 'es') {
-  try {
-    // Intentar primero en español, luego inglés
-    const languages = ['es', 'en', 'auto'];
-    
-    for (const currentLang of languages) {
-      try {
-        const captions = await fetchCaptions(videoID, currentLang);
-        if (captions && captions.length > 0) {
-          return captions.map(c => c.text).join(' ');
-        }
-      } catch (err) {
-        continue; // Intentar siguiente idioma
-      }
-    }
-    
-    throw new Error('No captions available for this video');
-  } catch (error) {
-    throw error;
-  }
-}
-
-// Función para obtener los subtítulos desde YouTube
-async function fetchCaptions(videoID, lang) {
-  const response = await fetch(`https://www.youtube.com/watch?v=${videoID}`, {
+async function fetchTranscript(videoId, lang) {
+  // Paso 1: Obtener la página del video
+  const videoPageResponse = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    }
+      'Accept-Language': lang,
+      'User-Agent': USER_AGENT,
+    },
   });
 
-  if (!response.ok) {
+  if (!videoPageResponse.ok) {
     throw new Error('Failed to fetch video page');
   }
 
-  const html = await response.text();
+  const videoPageBody = await videoPageResponse.text();
 
-  // Extraer captionTracks del HTML
-  let captionTracks;
-  
-  // Método 1: Buscar en ytInitialPlayerResponse
-  const playerMatch = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/);
-  if (playerMatch) {
-    try {
-      const playerResponse = JSON.parse(playerMatch[1]);
-      captionTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    } catch (e) {}
-  }
+  // Paso 2: Extraer información de captions
+  const splittedHTML = videoPageBody.split('"captions":');
 
-  // Método 2: Buscar directamente captionTracks
-  if (!captionTracks) {
-    const captionMatch = html.match(/"captionTracks":\s*(\[.+?\])/);
-    if (captionMatch) {
-      try {
-        captionTracks = JSON.parse(captionMatch[1]);
-      } catch (e) {}
+  if (splittedHTML.length <= 1) {
+    if (videoPageBody.includes('class="g-recaptcha"')) {
+      throw new Error('Too many requests - CAPTCHA required');
     }
+    if (!videoPageBody.includes('"playabilityStatus":')) {
+      throw new Error('Video unavailable');
+    }
+    throw new Error('Transcripts disabled for this video');
   }
 
-  if (!captionTracks || captionTracks.length === 0) {
-    throw new Error('No caption tracks found');
+  // Paso 3: Parsear JSON de captions
+  let captions;
+  try {
+    const captionsJSON = splittedHTML[1].split(',"videoDetails')[0].replace(/\n/g, '');
+    captions = JSON.parse(captionsJSON)?.playerCaptionsTracklistRenderer;
+  } catch (e) {
+    throw new Error('Failed to parse captions data');
   }
 
-  // Buscar el idioma solicitado
-  let track;
-  if (lang === 'auto') {
-    track = captionTracks[0]; // Tomar el primero disponible
-  } else {
-    track = captionTracks.find(t => t.languageCode === lang || t.languageCode?.startsWith(lang));
-    if (!track) track = captionTracks[0]; // Fallback al primero
+  if (!captions) {
+    throw new Error('Captions not found');
   }
 
-  if (!track || !track.baseUrl) {
+  if (!captions.captionTracks || captions.captionTracks.length === 0) {
+    throw new Error('No captions available for this video');
+  }
+
+  // Paso 4: Seleccionar el track de idioma correcto
+  let selectedTrack = captions.captionTracks.find(track => track.languageCode === lang);
+  
+  // Si no hay en el idioma solicitado, buscar español o el primero disponible
+  if (!selectedTrack) {
+    selectedTrack = captions.captionTracks.find(track => track.languageCode?.startsWith('es')) 
+                 || captions.captionTracks[0];
+  }
+
+  if (!selectedTrack || !selectedTrack.baseUrl) {
     throw new Error('No suitable caption track found');
   }
 
-  // Obtener el XML de los subtítulos
-  const captionsResponse = await fetch(track.baseUrl);
-  if (!captionsResponse.ok) {
-    throw new Error('Failed to fetch captions');
+  // Paso 5: Obtener el transcript XML
+  const transcriptURL = selectedTrack.baseUrl;
+  const transcriptResponse = await fetch(transcriptURL, {
+    headers: {
+      'Accept-Language': lang,
+      'User-Agent': USER_AGENT,
+    },
+  });
+
+  if (!transcriptResponse.ok) {
+    throw new Error('Failed to fetch transcript');
   }
 
-  const xml = await captionsResponse.text();
-  return parseXML(xml);
-}
+  const transcriptBody = await transcriptResponse.text();
 
-// Parser del XML de subtítulos
-function parseXML(xml) {
-  const textRegex = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>(.*?)<\/text>/gs;
-  const captions = [];
-  let match;
+  // Paso 6: Parsear el XML y extraer texto
+  const results = [...transcriptBody.matchAll(RE_XML_TRANSCRIPT)];
+  
+  if (results.length === 0) {
+    throw new Error('No transcript text found');
+  }
 
-  while ((match = textRegex.exec(xml)) !== null) {
-    const start = parseFloat(match[1]);
-    const dur = parseFloat(match[2]);
-    let text = match[3];
+  // Convertir a texto limpio
+  const fullText = results.map(result => {
+    let text = result[3];
     
     // Decodificar entidades HTML
-    text = decodeHTMLEntities(text);
-    
-    // Limpiar texto
     text = text
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
       .replace(/\n/g, ' ')
-      .replace(/\s+/g, ' ')
       .trim();
     
-    if (text) {
-      captions.push({
-        start,
-        dur,
-        text
-      });
-    }
-  }
+    return text;
+  }).filter(Boolean).join(' ');
 
-  return captions;
-}
-
-// Decodificar entidades HTML
-function decodeHTMLEntities(text) {
-  const entities = {
-    '&amp;': '&',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'",
-    '&nbsp;': ' ',
-    '&#x27;': "'",
-    '&#x2F;': '/'
-  };
-  
-  return text.replace(/&[#\w]+;/g, match => entities[match] || match);
+  return fullText;
 }
