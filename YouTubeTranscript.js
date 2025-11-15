@@ -1,249 +1,221 @@
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request))
-})
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const videoUrl = url.searchParams.get('url');
+    const videoId = url.searchParams.get('video_id');
 
-// --- NUEVO: Lista de User-Agents para rotación ---
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/108.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/108.0',
-  'Mozilla/5.0 (X11; Linux x86_64; rv:104.0) Gecko/20100101 Firefox/104.0',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Mobile/15E148 Safari/604.1'
-];
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Content-Type': 'application/json'
+    };
 
-// Función para obtener un User-Agent aleatorio
-function getRandomUserAgent() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
-
-async function handleRequest(request) {
-  const url = new URL(request.url)
-  
-  if (request.method !== 'GET') {
-    return jsonResponse({
-      status_code: 400,
-      message: 'Only GET requests are allowed',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
-  }
-  
-  const youtubeUrl = url.searchParams.get('url')
-  const videoIdParam = url.searchParams.get('video_id')
-  const language = url.searchParams.get('language') || 'en'
-  
-  if (!youtubeUrl && !videoIdParam) {
-    return jsonResponse({
-      status_code: 400,
-      message: 'The url or video_id parameter is required',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
-  }
-  
-  let videoId = videoIdParam
-  
-  if (youtubeUrl && !videoId) {
-    if (!youtubeUrl.trim()) {
-      return jsonResponse({
-        status_code: 400,
-        message: 'The url parameter cannot be empty',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400)
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
     }
-    
+
     try {
-      // --- MODIFICADO: Lógica para extraer el ID del video ---
-      if (youtubeUrl.includes('youtube.com/watch?v=')) {
-        videoId = new URL(youtubeUrl).searchParams.get('v')
-      } else if (youtubeUrl.includes('youtu.be/')) {
-        videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
-      } else if (youtubeUrl.includes('/shorts/')) { // <-- NUEVA REGLA para YouTube Shorts
-        const pathParts = new URL(youtubeUrl).pathname.split('/');
-        videoId = pathParts[pathParts.indexOf('shorts') + 1];
-      } else {
-        return jsonResponse({
+      let vid = videoId;
+      if (!vid && videoUrl) {
+        vid = extractVideoId(videoUrl);
+      }
+
+      if (!vid) {
+        return new Response(JSON.stringify({
           status_code: 400,
-          message: 'Invalid or unsupported YouTube URL format',
+          message: 'URL o video_id requerido',
           developer: 'El Impaciente',
           telegram_channel: 'https://t.me/Apisimpacientes'
-        }, 400)
+        }), { status: 400, headers: corsHeaders });
       }
-    } catch (e) {
-      return jsonResponse({
+
+      // Usar múltiples estrategias en paralelo
+      const transcript = await getTranscriptRobust(vid);
+
+      return new Response(JSON.stringify({
+        status_code: 200,
+        developer: 'El Impaciente',
+        telegram_channel: 'https://t.me/Apisimpacientes',
+        response: transcript
+      }), { status: 200, headers: corsHeaders });
+
+    } catch (error) {
+      return new Response(JSON.stringify({
         status_code: 400,
-        message: 'Could not parse YouTube URL',
+        message: error.message || 'No captions available for this video',
         developer: 'El Impaciente',
         telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400)
+      }), { status: 400, headers: corsHeaders });
     }
   }
+};
+
+function extractVideoId(url) {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
+    /^([a-zA-Z0-9_-]{11})$/
+  ];
   
-  if (!videoId || videoId.trim() === '') {
-    return jsonResponse({
-      status_code: 400,
-      message: 'Could not extract video ID from URL',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
   }
-  
+  return null;
+}
+
+async function getTranscriptRobust(videoId) {
+  // Intentar todos los métodos en paralelo para mayor velocidad
+  const methods = [
+    fetchTranscriptYTInnerTube(videoId),
+    fetchTranscriptDirect(videoId),
+    fetchTranscriptEmbed(videoId)
+  ];
+
+  // Promise.any retorna el primero que tenga éxito
   try {
-    const transcript = await getYouTubeTranscript(videoId, language)
-    const fullText = transcript.map(item => item.text).join(' ')
-    
-    return jsonResponse({
-      status_code: 200,
-      response: fullText,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 200)
-    
+    return await Promise.any(methods);
   } catch (error) {
-    return jsonResponse({
-      status_code: 400,
-      message: error.message || 'Error processing request',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+    throw new Error('No captions available for this video');
   }
 }
 
-async function getYouTubeTranscript(videoId, language = 'en') {
-  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
-  // --- MODIFICADO: Usar un User-Agent aleatorio ---
-  const randomUserAgent = getRandomUserAgent();
+// Método 1: YouTube InnerTube API (más confiable)
+async function fetchTranscriptYTInnerTube(videoId) {
+  const apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'; // API key pública de YouTube
   
-  const keyResponse = await fetch(videoUrl, {
-    headers: { 'User-Agent': randomUserAgent },
-    signal: AbortSignal.timeout(30000)
-  })
-  
-  if (!keyResponse.ok) {
-    throw new Error('Failed to access video page')
-  }
-  
-  const html = await keyResponse.text()
-  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
-  if (!apiKeyMatch) {
-    throw new Error('INNERTUBE_API_KEY not found')
-  }
-  
-  const apiKey = apiKeyMatch[1]
-  
-  const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
-  const clientVersions = ["20.45.34", "20.45.32"]
-  let playerResponse
-  
-  for (const version of clientVersions) {
-    const playerBody = {
-      context: {
-        client: {
-          clientName: "ANDROID",
-          clientVersion: version
-        }
-      },
-      videoId: videoId
-    }
-    
-    try {
-      const response = await fetch(playerUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': randomUserAgent // <-- Usar el mismo User-Agent aleatorio
-        },
-        body: JSON.stringify(playerBody),
-        signal: AbortSignal.timeout(30000)
-      })
-      
-      if (response.ok) {
-        playerResponse = await response.json()
-        break
-      }
-    } catch (err) {
-      continue
-    }
-  }
-  
-  if (!playerResponse || !playerResponse.captions) {
-    throw new Error('No captions available for this video')
-  }
-  
-  const captionsData = playerResponse.captions
-  const tracks = captionsData.playerCaptionsTracklistRenderer?.captionTracks || []
-  
-  if (tracks.length === 0) {
-    throw new Error('No caption tracks available')
-  }
-  
-  let track = tracks.find(t => t.languageCode === language)
-  if (!track) {
-    track = tracks[0]
-  }
-  
-  let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
-  const captionsResponse = await fetch(baseUrl, {
-    headers: { 'User-Agent': randomUserAgent }, // <-- Usar el mismo User-Agent aleatorio
-    signal: AbortSignal.timeout(30000)
-  })
-  
-  if (!captionsResponse.ok) {
-    throw new Error('Failed to fetch captions')
-  }
-  
-  const captionsXml = await captionsResponse.text()
-  const transcript = parseCaptionsXml(captionsXml)
-  
-  if (transcript.length === 0) {
-    throw new Error('No transcript found')
-  }
-  
-  transcript.language = track.languageCode
-  
-  return transcript
-}
-
-function parseCaptionsXml(xmlContent) {
-  const captions = []
-  const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
-  
-  let match
-  while ((match = pattern.exec(xmlContent)) !== null) {
-    const startTime = parseFloat(match[1])
-    const duration = parseFloat(match[2])
-    let text = match[3]
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/\n/g, ' ')
-      .trim()
-    
-    if (text && !text.includes('[BLANK_AUDIO]')) {
-      captions.push({
-        startTime,
-        duration,
-        text
-      })
-    }
-  }
-  
-  return captions
-}
-
-function jsonResponse(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
+  const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${apiKey}`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      ...extraHeaders
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'X-YouTube-Client-Name': '1',
+      'X-YouTube-Client-Version': '2.20231219.04.00'
+    },
+    body: JSON.stringify({
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion: '2.20231219.04.00',
+          hl: 'es',
+          gl: 'US'
+        }
+      },
+      params: btoa(`\n\x0b${videoId}`)
+    })
+  });
+
+  if (!response.ok) throw new Error('InnerTube failed');
+
+  const data = await response.json();
+  const transcriptData = data?.actions?.[0]?.updateEngagementPanelAction?.content
+    ?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body
+    ?.transcriptSegmentListRenderer?.initialSegments;
+
+  if (!transcriptData) throw new Error('No transcript in InnerTube');
+
+  const texts = transcriptData.map(segment => 
+    segment.transcriptSegmentRenderer?.snippet?.runs?.[0]?.text || ''
+  ).filter(Boolean);
+
+  if (texts.length === 0) throw new Error('Empty transcript');
+
+  return texts.join(' ');
+}
+
+// Método 2: Directo desde HTML
+async function fetchTranscriptDirect(videoId) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+  };
+
+  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, { 
+    headers,
+    cf: { cacheTtl: 300 } // Cache por 5 minutos
+  });
+
+  const html = await response.text();
+
+  // Buscar en ytInitialPlayerResponse
+  let match = html.match(/ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s);
+  if (!match) {
+    match = html.match(/"captions":\s*({.+?}),/s);
+  }
+
+  if (!match) throw new Error('No player response');
+
+  const playerData = JSON.parse(match[1]);
+  const captionTracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+
+  if (!captionTracks || captionTracks.length === 0) {
+    throw new Error('No captions in HTML');
+  }
+
+  // Priorizar español
+  let caption = captionTracks.find(c => c.languageCode?.startsWith('es'));
+  if (!caption) caption = captionTracks[0];
+
+  const transcriptUrl = caption.baseUrl;
+  const transcriptResponse = await fetch(transcriptUrl);
+  const xml = await transcriptResponse.text();
+
+  return parseXMLTranscript(xml);
+}
+
+// Método 3: Usando embed
+async function fetchTranscriptEmbed(videoId) {
+  const response = await fetch(`https://www.youtube.com/embed/${videoId}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+      'Referer': 'https://www.youtube.com/'
     }
-  })
+  });
+
+  const html = await response.text();
+  
+  // Extraer configuración del player
+  const match = html.match(/"captionTracks":\s*(\[.+?\])/);
+  if (!match) throw new Error('No captions in embed');
+
+  const captions = JSON.parse(match[1]);
+  let caption = captions.find(c => c.languageCode?.startsWith('es')) || captions[0];
+
+  const transcriptResponse = await fetch(caption.baseUrl);
+  const xml = await transcriptResponse.text();
+
+  return parseXMLTranscript(xml);
+}
+
+function parseXMLTranscript(xml) {
+  const textRegex = /<text[^>]*>(.*?)<\/text>/gs;
+  const texts = [];
+  let match;
+
+  while ((match = textRegex.exec(xml)) !== null) {
+    let text = match[1];
+    
+    // Decodificar entidades HTML
+    text = text.replace(/&amp;/g, '&')
+               .replace(/&lt;/g, '<')
+               .replace(/&gt;/g, '>')
+               .replace(/&quot;/g, '"')
+               .replace(/&#39;/g, "'")
+               .replace(/&nbsp;/g, ' ')
+               .replace(/\n/g, ' ')
+               .replace(/\s+/g, ' ')
+               .trim();
+    
+    if (text) texts.push(text);
+  }
+
+  if (texts.length === 0) throw new Error('No text in transcript');
+
+  return texts.join(' ');
+}
+
+// Helper para btoa (base64)
+function btoa(str) {
+  return Buffer.from(str, 'binary').toString('base64');
 }
