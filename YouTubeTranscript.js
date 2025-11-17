@@ -2,46 +2,55 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-
 async function handleRequest(request) {
-  const url = new URL(request.url)
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type'
+  }
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: corsHeaders,
+      status: 204
+    })
+  }
 
   if (request.method !== 'GET') {
     return jsonResponse({
-      status_code: 400,
+      status_code: 405,
       message: 'Only GET requests are allowed',
-      developer: 'El Impaciente (Fixed by Grok)',
+      developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+    }, 405, corsHeaders)
   }
-
+  
+  const url = new URL(request.url)
   const youtubeUrl = url.searchParams.get('url')
   const videoIdParam = url.searchParams.get('video_id')
   const language = url.searchParams.get('language') || 'en'
-
+  
   if (!youtubeUrl && !videoIdParam) {
     return jsonResponse({
       status_code: 400,
-      message: 'url or video_id parameter is required',
-      developer: 'El Impaciente (Fixed by Grok)',
+      message: 'The url or video_id parameter is required',
+      developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+    }, 400, corsHeaders)
   }
-
+  
   let videoId = videoIdParam
-
-  // Extract video ID from URL
+  
   if (youtubeUrl && !videoId) {
     if (!youtubeUrl.trim()) {
       return jsonResponse({
         status_code: 400,
-        message: 'url parameter cannot be empty',
-        developer: 'El Impaciente (Fixed by Grok)',
+        message: 'The url parameter cannot be empty',
+        developer: 'El Impaciente',
         telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400)
+      }, 400, corsHeaders)
     }
-
+    
     try {
       if (youtubeUrl.includes('youtube.com/watch?v=')) {
         videoId = new URL(youtubeUrl).searchParams.get('v')
@@ -51,137 +60,198 @@ async function handleRequest(request) {
         return jsonResponse({
           status_code: 400,
           message: 'Invalid YouTube URL format',
-          developer: 'El Impaciente (Fixed by Grok)',
+          developer: 'El Impaciente',
           telegram_channel: 'https://t.me/Apisimpacientes'
-        }, 400)
+        }, 400, corsHeaders)
       }
     } catch (e) {
       return jsonResponse({
         status_code: 400,
-        message: 'Failed to parse YouTube URL',
-        developer: 'El Impaciente (Fixed by Grok)',
+        message: 'Could not parse YouTube URL',
+        developer: 'El Impaciente',
         telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400)
+      }, 400, corsHeaders)
     }
   }
-
+  
   if (!videoId || videoId.trim() === '') {
     return jsonResponse({
       status_code: 400,
-      message: 'Could not extract video ID',
-      developer: 'El Impaciente (Fixed by Grok)',
+      message: 'Could not extract video ID from URL',
+      developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+    }, 400, corsHeaders)
   }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 24000) // 24 seconds max
-
+  
   try {
-    const transcript = await getYouTubeTranscript(videoId, language, controller.signal)
-    const fullText = transcript.map(t => t.text).join(' ')
-
-    clearTimeout(timeout)
+    // Try YouTube native captions first
+    const transcript = await getYouTubeTranscript(videoId, language)
+    const fullText = transcript.map(item => item.text).join(' ')
+    
     return jsonResponse({
       status_code: 200,
-      video_id: videoId,
-      language: transcript.language || language,
       response: fullText,
-      developer: 'El Impaciente (Fixed by Grok)',
+      source: 'youtube_captions',
+      language: transcript.language || language,
+      developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 200, { 'Cache-Control': 'public, max-age=3600' })
-
+    }, 200, { ...corsHeaders, 'Cache-Control': 'public, max-age=3600' })
+    
   } catch (error) {
-    clearTimeout(timeout)
-    return jsonResponse({
-      status_code: 400,
-      message: error.message || 'Failed to get transcript',
-      developer: 'El Impaciente (Fixed by Grok)',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400)
+    // Fallback to kome.ai API
+    try {
+      const komeTranscript = await getKomeTranscript(videoId)
+      
+      return jsonResponse({
+        status_code: 200,
+        response: komeTranscript,
+        source: 'kome_ai',
+        note: 'YouTube captions unavailable, using AI transcription',
+        developer: 'El Impaciente',
+        telegram_channel: 'https://t.me/Apisimpacientes'
+      }, 200, { ...corsHeaders, 'Cache-Control': 'public, max-age=3600' })
+      
+    } catch (komeError) {
+      return jsonResponse({
+        status_code: 400,
+        message: 'Transcription unavailable',
+        details: 'Neither YouTube captions nor AI transcription are available for this video',
+        developer: 'El Impaciente',
+        telegram_channel: 'https://t.me/Apisimpacientes'
+      }, 400, corsHeaders)
+    }
   }
 }
 
-// =============================
-// FIXED & OPTIMIZED Transcript Logic
-// =============================
-async function getYouTubeTranscript(videoId, language = 'en', signal) {
-  const apiKey = await fetchApiKey(videoId, signal)
-  const tracks = await fetchCaptionTracks(videoId, apiKey, signal)
-
-  let track = tracks.find(t => t.languageCode === language) ||
-              tracks.find(t => t.kind === 'asr') ||
-              tracks[0]
-
-  if (!track) throw new Error('No caption track available')
-
-  const transcript = await fetchTranscriptXml(track.baseUrl, signal)
+async function getYouTubeTranscript(videoId, language = 'en') {
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
+  const keyResponse = await fetch(videoUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    signal: AbortSignal.timeout(30000)
+  })
+  
+  if (!keyResponse.ok) {
+    throw new Error('Failed to access video page')
+  }
+  
+  const html = await keyResponse.text()
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
+  if (!apiKeyMatch) {
+    throw new Error('INNERTUBE_API_KEY not found')
+  }
+  
+  const apiKey = apiKeyMatch[1]
+  const playerUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`
+  const clientVersions = ["20.45.34", "20.45.32"]
+  let playerResponse
+  
+  for (const version of clientVersions) {
+    const playerBody = {
+      context: {
+        client: {
+          clientName: "ANDROID",
+          clientVersion: version
+        }
+      },
+      videoId: videoId
+    }
+    
+    try {
+      const response = await fetch(playerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        body: JSON.stringify(playerBody),
+        signal: AbortSignal.timeout(30000)
+      })
+      
+      if (response.ok) {
+        playerResponse = await response.json()
+        break
+      }
+    } catch (err) {
+      continue
+    }
+  }
+  
+  if (!playerResponse || !playerResponse.captions) {
+    throw new Error('No captions available')
+  }
+  
+  const captionsData = playerResponse.captions
+  const tracks = captionsData.playerCaptionsTracklistRenderer?.captionTracks || []
+  
+  if (tracks.length === 0) {
+    throw new Error('No caption tracks available')
+  }
+  
+  let track = tracks.find(t => t.languageCode === language)
+  if (!track) {
+    track = tracks[0]
+  }
+  
+  let baseUrl = track.baseUrl.replace(/&fmt=\w+/, '')
+  const captionsResponse = await fetch(baseUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(30000)
+  })
+  
+  if (!captionsResponse.ok) {
+    throw new Error('Failed to fetch captions')
+  }
+  
+  const captionsXml = await captionsResponse.text()
+  const transcript = parseCaptionsXml(captionsXml)
+  
+  if (transcript.length === 0) {
+    throw new Error('No transcript found')
+  }
+  
   transcript.language = track.languageCode
+  
   return transcript
 }
 
-async function fetchApiKey(videoId, signal) {
-  const resp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: { 'User-Agent': UA },
-    signal
-  })
-  if (!resp.ok) throw new Error('Video page not accessible')
-  const html = await resp.text()
-  const match = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
-  if (!match) throw new Error('API key not found')
-  return match[1]
-}
-
-async function fetchCaptionTracks(videoId, apiKey, signal) {
-  const body = {
-    context: {
-      client: {
-        clientName: 'WEB',
-        clientVersion: '2.20251116.01.00' // Latest working version
-      }
-    },
-    videoId
-  }
-
-  const resp = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+async function getKomeTranscript(videoId) {
+  const response = await fetch('https://kome.ai/api/transcript', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': UA
+      'Origin': 'https://kome.ai',
+      'Referer': 'https://kome.ai/tools/youtube-transcript-generator',
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json, text/plain, */*'
     },
-    body: JSON.stringify(body),
-    signal
+    body: JSON.stringify({
+      video_id: videoId,
+      format: true
+    }),
+    signal: AbortSignal.timeout(30000)
   })
 
-  if (!resp.ok) throw new Error('Failed to fetch player data')
-  const data = await resp.json()
+  if (!response.ok) {
+    throw new Error(`Kome API failed with status: ${response.status}`)
+  }
 
-  const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks
-  if (!tracks?.length) throw new Error('No subtitles available')
-  return tracks
+  const data = await response.json()
+
+  if (!data.transcript) {
+    throw new Error('No transcript available from Kome API')
+  }
+
+  return data.transcript
 }
 
-async function fetchTranscriptXml(baseUrl, signal) {
-  const url = new URL(baseUrl)
-  url.searchParams.delete('fmt')
-  url.searchParams.set('fmt', 'xml') // Force XML
-
-  const resp = await fetch(url.toString(), {
-    headers: { 'User-Agent': UA },
-    signal
-  })
-
-  if (!resp.ok) throw new Error('Failed to download subtitles')
-  const xml = await resp.text()
-  return parseCaptionsXml(xml)
-}
-
-function parseCaptionsXml(xml) {
+function parseCaptionsXml(xmlContent) {
   const captions = []
-  const regex = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
+  const pattern = /<text start="([^"]+)" dur="([^"]+)">([^<]+)<\/text>/g
+  
   let match
-
-  while ((match = regex.exec(xml)) !== null) {
+  while ((match = pattern.exec(xmlContent)) !== null) {
+    const startTime = parseFloat(match[1])
+    const duration = parseFloat(match[2])
     let text = match[3]
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
@@ -190,17 +260,16 @@ function parseCaptionsXml(xml) {
       .replace(/&#39;/g, "'")
       .replace(/\n/g, ' ')
       .trim()
-
-    if (text && !text.includes('[BLANK_AUDIO]') && !text.includes('[Music]')) {
+    
+    if (text && !text.includes('[BLANK_AUDIO]')) {
       captions.push({
-        startTime: parseFloat(match[1]),
-        duration: parseFloat(match[2]),
+        startTime,
+        duration,
         text
       })
     }
   }
-
-  if (captions.length === 0) throw new Error('No readable text in subtitles')
+  
   return captions
 }
 
@@ -209,9 +278,6 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
     status,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET',
-      'Access-Control-Allow-Headers': 'Content-Type',
       ...extraHeaders
     }
   })
