@@ -67,6 +67,14 @@ async function handleRequest(request) {
         videoId = new URL(youtubeUrl).searchParams.get('v')
       } else if (youtubeUrl.includes('youtu.be/')) {
         videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
+      } else if (youtubeUrl.includes('youtube.com/shorts/')) {
+        videoId = new URL(youtubeUrl).pathname.split('/shorts/')[1].split('?')[0]
+      } else if (youtubeUrl.includes('youtube.com/embed/')) {
+        videoId = new URL(youtubeUrl).pathname.split('/embed/')[1].split('?')[0]
+      } else if (youtubeUrl.includes('youtube.com/v/')) {
+        videoId = new URL(youtubeUrl).pathname.split('/v/')[1].split('?')[0]
+      } else if (youtubeUrl.includes('m.youtube.com/watch?v=')) {
+        videoId = new URL(youtubeUrl).searchParams.get('v')
       } else {
         return jsonResponse({
           status_code: 400,
