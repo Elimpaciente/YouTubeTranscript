@@ -31,9 +31,8 @@ async function handleRequest(request) {
   
   const url = new URL(request.url)
   const youtubeUrl = url.searchParams.get('url')
-  const videoIdParam = url.searchParams.get('video_id')
   
-  if (!youtubeUrl && !videoIdParam) {
+  if (!youtubeUrl) {
     return jsonResponse({
       status_code: 400,
       developer: 'El Impaciente',
@@ -42,66 +41,11 @@ async function handleRequest(request) {
         el_impaciente: 'https://t.me/Apisimpacientes',
         ashlynn_repository: 'https://t.me/Ashlynn_Repository'
       },
-      message: 'The url or video_id parameter is required'
+      message: 'The url parameter is required'
     }, 400, corsHeaders)
   }
   
-  let videoId = videoIdParam
-  
-  if (youtubeUrl && !videoId) {
-    if (!youtubeUrl.trim()) {
-      return jsonResponse({
-        status_code: 400,
-        developer: 'El Impaciente',
-        credits: 'Ashlynn Repository',
-        telegram_channels: {
-          el_impaciente: 'https://t.me/Apisimpacientes',
-          ashlynn_repository: 'https://t.me/Ashlynn_Repository'
-        },
-        message: 'The url parameter cannot be empty'
-      }, 400, corsHeaders)
-    }
-    
-    try {
-      if (youtubeUrl.includes('youtube.com/watch?v=')) {
-        videoId = new URL(youtubeUrl).searchParams.get('v')
-      } else if (youtubeUrl.includes('youtu.be/')) {
-        videoId = new URL(youtubeUrl).pathname.slice(1).split('?')[0]
-      } else if (youtubeUrl.includes('youtube.com/shorts/')) {
-        videoId = new URL(youtubeUrl).pathname.split('/shorts/')[1].split('?')[0]
-      } else if (youtubeUrl.includes('youtube.com/embed/')) {
-        videoId = new URL(youtubeUrl).pathname.split('/embed/')[1].split('?')[0]
-      } else if (youtubeUrl.includes('youtube.com/v/')) {
-        videoId = new URL(youtubeUrl).pathname.split('/v/')[1].split('?')[0]
-      } else if (youtubeUrl.includes('m.youtube.com/watch?v=')) {
-        videoId = new URL(youtubeUrl).searchParams.get('v')
-      } else {
-        return jsonResponse({
-          status_code: 400,
-          developer: 'El Impaciente',
-          credits: 'Ashlynn Repository',
-          telegram_channels: {
-            el_impaciente: 'https://t.me/Apisimpacientes',
-            ashlynn_repository: 'https://t.me/Ashlynn_Repository'
-          },
-          message: 'Invalid YouTube URL format'
-        }, 400, corsHeaders)
-      }
-    } catch (e) {
-      return jsonResponse({
-        status_code: 400,
-        developer: 'El Impaciente',
-        credits: 'Ashlynn Repository',
-        telegram_channels: {
-          el_impaciente: 'https://t.me/Apisimpacientes',
-          ashlynn_repository: 'https://t.me/Ashlynn_Repository'
-        },
-        message: 'Could not parse YouTube URL'
-      }, 400, corsHeaders)
-    }
-  }
-  
-  if (!videoId || videoId.trim() === '') {
+  if (!youtubeUrl.trim()) {
     return jsonResponse({
       status_code: 400,
       developer: 'El Impaciente',
@@ -110,12 +54,28 @@ async function handleRequest(request) {
         el_impaciente: 'https://t.me/Apisimpacientes',
         ashlynn_repository: 'https://t.me/Ashlynn_Repository'
       },
-      message: 'Could not extract video ID from URL'
+      message: 'The url parameter cannot be empty'
     }, 400, corsHeaders)
   }
   
   try {
-    const transcript = await getKomeTranscript(videoId)
+    const isValidYoutubeUrl = youtubeUrl.includes('youtube.com') || 
+                              youtubeUrl.includes('youtu.be')
+    
+    if (!isValidYoutubeUrl) {
+      return jsonResponse({
+        status_code: 400,
+        developer: 'El Impaciente',
+        credits: 'Ashlynn Repository',
+        telegram_channels: {
+          el_impaciente: 'https://t.me/Apisimpacientes',
+          ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+        },
+        message: 'Invalid YouTube URL format'
+      }, 400, corsHeaders)
+    }
+    
+    const transcript = await getKomeTranscript(youtubeUrl)
     
     return jsonResponse({
       status_code: 200,
@@ -137,13 +97,12 @@ async function handleRequest(request) {
         el_impaciente: 'https://t.me/Apisimpacientes',
         ashlynn_repository: 'https://t.me/Ashlynn_Repository'
       },
-      message: 'Transcription unavailable',
-      details: error.message || 'Could not retrieve transcript for this video'
+      message: 'Transcription unavailable'
     }, 400, corsHeaders)
   }
 }
 
-async function getKomeTranscript(videoId) {
+async function getKomeTranscript(youtubeUrl) {
   const response = await fetch('https://kome.ai/api/transcript', {
     method: 'POST',
     headers: {
@@ -154,7 +113,7 @@ async function getKomeTranscript(videoId) {
       'Accept': 'application/json, text/plain, */*'
     },
     body: JSON.stringify({
-      video_id: videoId,
+      video_id: youtubeUrl,
       format: true
     }),
     signal: AbortSignal.timeout(30000)
