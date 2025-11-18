@@ -30,6 +30,20 @@ async function handleRequest(request) {
   }
   
   const url = new URL(request.url)
+  
+  if (!url.pathname.startsWith('/transcript')) {
+    return jsonResponse({
+      status_code: 404,
+      developer: 'El Impaciente',
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
+      message: 'Endpoint not found. Use /transcript'
+    }, 404, corsHeaders)
+  }
+  
   const youtubeUrl = url.searchParams.get('url')
   
   if (!youtubeUrl) {
