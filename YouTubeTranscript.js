@@ -20,58 +20,41 @@ async function handleRequest(request) {
     return jsonResponse({
       status_code: 405,
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
       message: 'Only GET requests are allowed'
     }, 405, corsHeaders)
   }
   
   const url = new URL(request.url)
-  
-  if (!url.pathname.startsWith('/summarize')) {
-    return jsonResponse({
-      status_code: 404,
-      message: 'Endpoint not found. Use /summarize',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 404, corsHeaders)
-  }
-  
   const youtubeUrl = url.searchParams.get('url')
-  const language = url.searchParams.get('language')
   
   if (!youtubeUrl) {
     return jsonResponse({
       status_code: 400,
-      message: 'The url and language parameters are required',
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
+      message: 'The url parameter is required'
     }, 400, corsHeaders)
   }
   
   if (!youtubeUrl.trim()) {
     return jsonResponse({
       status_code: 400,
-      message: 'The url parameter cannot be empty',
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400, corsHeaders)
-  }
-  
-  if (!language) {
-    return jsonResponse({
-      status_code: 400,
-      message: 'The language parameter is required (e.g., english, spanish, french)',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
-    }, 400, corsHeaders)
-  }
-  
-  if (!language.trim()) {
-    return jsonResponse({
-      status_code: 400,
-      message: 'The language parameter cannot be empty',
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
+      message: 'The url parameter cannot be empty'
     }, 400, corsHeaders)
   }
   
@@ -82,86 +65,71 @@ async function handleRequest(request) {
     if (!isValidYoutubeUrl) {
       return jsonResponse({
         status_code: 400,
-        message: 'Invalid YouTube URL format',
         developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
+        credits: 'Ashlynn Repository',
+        telegram_channels: {
+          el_impaciente: 'https://t.me/Apisimpacientes',
+          ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+        },
+        message: 'Invalid YouTube URL format'
       }, 400, corsHeaders)
     }
     
-    const transcriptUrl = `https://yt-transcript.apisimpacientes.workers.dev/transcript?url=${encodeURIComponent(youtubeUrl)}`
-    
-    const transcriptResponse = await fetch(transcriptUrl, {
-      method: 'GET',
-      signal: AbortSignal.timeout(30000)
-    })
-    
-    if (!transcriptResponse.ok) {
-      return jsonResponse({
-        status_code: 400,
-        message: 'Failed to fetch YouTube transcript',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400, corsHeaders)
-    }
-    
-    const transcriptData = await transcriptResponse.json()
-    
-    if (transcriptData.status_code !== 200 || !transcriptData.response) {
-      return jsonResponse({
-        status_code: 400,
-        message: 'No transcript available for this video',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400, corsHeaders)
-    }
-    
-    const transcript = transcriptData.response
-    
-    const prompt = `Please provide a comprehensive summary of the following YouTube video transcript in ${language}. Include the main topics, key points, and important details:\n\n${transcript}`
-    
-    const mistralUrl = `https://mistral-ai.apisimpacientes.workers.dev/?message=${encodeURIComponent(prompt)}`
-    
-    const aiResponse = await fetch(mistralUrl, {
-      method: 'GET',
-      signal: AbortSignal.timeout(90000)
-    })
-    
-    if (!aiResponse.ok) {
-      return jsonResponse({
-        status_code: 400,
-        message: 'Failed to generate summary',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400, corsHeaders)
-    }
-    
-    const summaryData = await aiResponse.json()
-    
-    if (!summaryData || summaryData.status_code !== 200 || !summaryData.response) {
-      return jsonResponse({
-        status_code: 400,
-        message: 'Empty response from AI service',
-        developer: 'El Impaciente',
-        telegram_channel: 'https://t.me/Apisimpacientes'
-      }, 400, corsHeaders)
-    }
+    const transcript = await getKomeTranscript(youtubeUrl)
     
     return jsonResponse({
       status_code: 200,
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      language: language,
-      response: summaryData.response
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
+      response: transcript
     }, 200, { ...corsHeaders, 'Cache-Control': 'public, max-age=3600' })
     
   } catch (error) {
     return jsonResponse({
       status_code: 400,
-      message: 'Summarization unavailable',
       developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes'
+      credits: 'Ashlynn Repository',
+      telegram_channels: {
+        el_impaciente: 'https://t.me/Apisimpacientes',
+        ashlynn_repository: 'https://t.me/Ashlynn_Repository'
+      },
+      message: 'Transcription unavailable'
     }, 400, corsHeaders)
   }
+}
+
+async function getKomeTranscript(youtubeUrl) {
+  const response = await fetch('https://kome.ai/api/transcript', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': 'https://kome.ai',
+      'Referer': 'https://kome.ai/tools/youtube-transcript-generator',
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json, text/plain, */*'
+    },
+    body: JSON.stringify({
+      video_id: youtubeUrl,
+      format: true
+    }),
+    signal: AbortSignal.timeout(30000)
+  })
+
+  if (!response.ok) {
+    throw new Error(`API request failed with status: ${response.status}`)
+  }
+
+  const data = await response.json()
+
+  if (!data.transcript) {
+    throw new Error('No transcript available for this video')
+  }
+
+  return data.transcript
 }
 
 function jsonResponse(data, status = 200, extraHeaders = {}) {
