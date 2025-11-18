@@ -137,8 +137,7 @@ async function handleRequest(request) {
         el_impaciente: 'https://t.me/Apisimpacientes',
         ashlynn_repository: 'https://t.me/Ashlynn_Repository'
       },
-      message: 'Transcription unavailable',
-      details: error.message || 'Could not retrieve transcript for this video'
+      message: 'Transcription unavailable'
     }, 400, corsHeaders)
   }
 }
