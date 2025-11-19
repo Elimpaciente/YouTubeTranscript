@@ -261,12 +261,9 @@
                 <div class="no-transcript" id="noTranscript" style="display: none;">
                     <h3>Transcript not available</h3>
                 </div>
-                <div class="transcript-box" id="transcriptText"></div>
-                <div class="btn-group">
-                    <button class="btn-copy" id="copyBtn" onclick="copyTranscript()">Copy Transcript</button>
-                    <button class="btn-reset" onclick="resetForm()">New Transcript</button>
-                </div>
+                <button class="btn-copy" id="copyBtn" onclick="copyTranscript()" style="width: 100%; margin-bottom: 20px;">Copy Transcript</button>
                 <div class="copy-feedback" id="copyFeedback">Copied to clipboard!</div>
+                <div class="transcript-box" id="transcriptText"></div>
             </div>
         </div>
     </div>
@@ -359,13 +356,7 @@
             });
         }
 
-        function resetForm() {
-            document.getElementById('youtubeUrl').value = '';
-            document.getElementById('result').style.display = 'none';
-            document.getElementById('loading').style.display = 'none';
-            clearError();
-            document.getElementById('youtubeUrl').focus();
-        }
+
 
         function showError(message) {
             const errorDiv = document.getElementById('errorMsg');
