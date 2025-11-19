@@ -146,6 +146,7 @@
 
         .result {
             display: none;
+            margin-top: 30px;
         }
 
         .result-header {
@@ -160,6 +161,19 @@
             color: #2e7d32;
             font-size: 1em;
             margin-bottom: 10px;
+        }
+
+        .no-transcript {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .no-transcript h3 {
+            color: #856404;
+            font-size: 1em;
         }
 
         .transcript-box {
@@ -237,16 +251,19 @@
 
             <div class="loading" id="loading">
                 <div class="spinner"></div>
-                <p>Extracting transcript...</p>
+                <p>Transcribing video, please wait...</p>
             </div>
 
             <div class="result" id="result">
-                <div class="result-header">
+                <div class="result-header" id="resultHeader">
                     <h3>Transcript Ready</h3>
+                </div>
+                <div class="no-transcript" id="noTranscript" style="display: none;">
+                    <h3>Transcript not available</h3>
                 </div>
                 <div class="transcript-box" id="transcriptText"></div>
                 <div class="btn-group">
-                    <button class="btn-copy" onclick="copyTranscript()">Copy Transcript</button>
+                    <button class="btn-copy" id="copyBtn" onclick="copyTranscript()">Copy Transcript</button>
                     <button class="btn-reset" onclick="resetForm()">New Transcript</button>
                 </div>
                 <div class="copy-feedback" id="copyFeedback">Copied to clipboard!</div>
@@ -286,11 +303,13 @@
             
             if (!encodedUrl) return;
 
+            // Limpiar resultado anterior
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('youtubeUrl').value = '';
+
             const btn = document.getElementById('transcribeBtn');
             btn.disabled = true;
             document.getElementById('loading').style.display = 'block';
-            document.getElementById('result').style.display = 'none';
-            document.getElementById('youtubeUrl').value = '';
 
             try {
                 const response = await fetch(API_BASE + encodedUrl);
@@ -299,7 +318,7 @@
                 if (data.status_code === 200 && data.response) {
                     displayTranscript(data.response);
                 } else {
-                    showError('Unable to extract transcript. The video may not have subtitles available.');
+                    displayNoTranscript();
                 }
             } catch (error) {
                 showError('Error: ' + error.message + '. Please check the URL and try again.');
@@ -311,9 +330,20 @@
 
         function displayTranscript(text) {
             document.getElementById('transcriptText').textContent = text;
+            document.getElementById('transcriptText').style.display = 'block';
+            document.getElementById('resultHeader').style.display = 'block';
+            document.getElementById('noTranscript').style.display = 'none';
+            document.getElementById('copyBtn').style.display = 'block';
             document.getElementById('result').style.display = 'block';
-            document.getElementById('formSection').style.display = 'none';
             document.getElementById('transcriptText').scrollTop = 0;
+        }
+
+        function displayNoTranscript() {
+            document.getElementById('transcriptText').style.display = 'none';
+            document.getElementById('resultHeader').style.display = 'none';
+            document.getElementById('noTranscript').style.display = 'block';
+            document.getElementById('copyBtn').style.display = 'none';
+            document.getElementById('result').style.display = 'block';
         }
 
         function copyTranscript() {
@@ -331,7 +361,6 @@
 
         function resetForm() {
             document.getElementById('youtubeUrl').value = '';
-            document.getElementById('formSection').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             document.getElementById('loading').style.display = 'none';
             clearError();
