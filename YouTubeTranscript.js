@@ -25,7 +25,7 @@ async function handleRequest(request) {
   }
   try {
     const transcript = await getKomeTranscript(youtubeUrl)
-    return jsonResponse({ response: transcript }, 200, { 'Cache-Control': 'public, max-age=3600' })
+    return jsonResponse({ status_code: 200, ...METADATA, response: transcript }, 200, { 'Cache-Control': 'public, max-age=3600' })
   } catch (error) {
     return errorResponse('Transcription unavailable', 400)
   }
