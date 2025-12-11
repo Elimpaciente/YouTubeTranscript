@@ -24,17 +24,26 @@ const CORS = {
  * - https://www.youtube.com/watch?v=JPFFoYAWkrQ
  */
 function extractVideoId(url) {
-  const urlObj = new URL(url);
-  if (urlObj.hostname.includes('youtu.be')) {
-    return urlObj.pathname.substring(1);
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.hostname.includes('youtu.be')) {
+      return urlObj.pathname.substring(1);
+    }
+    if (urlObj.hostname.includes('youtube.com')) {
+      return urlObj.searchParams.get('v');
+    }
+    return null;
+  } catch (e) {
+    return null;
   }
-  if (urlObj.hostname.includes('youtube.com')) {
-    return urlObj.searchParams.get('v');
-  }
-  return null;
 }
 
 async function handleRequest(request) {
+  // Manejar solicitudes OPTIONS para CORS
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { headers: CORS });
+  }
+
   const url = new URL(request.url)
   if (!url.pathname.startsWith('/transcript')) {
     return errorResponse('Endpoint not found. Use /transcript', 404)
@@ -46,7 +55,7 @@ async function handleRequest(request) {
   }
 
   try {
-    // **MODIFICACIÓN CLAVE:** Usar la nueva función de YouTranscripts
+    // **MODIFICACIÓN CLAVE:** Usar la función de Web Scraping
     const transcript = await getYouTranscript(youtubeUrl) 
     return jsonResponse({ status_code: 200, ...METADATA, response: transcript }, 200, { 'Cache-Control': 'public, max-age=3600' })
   } catch (error) {
@@ -56,7 +65,8 @@ async function handleRequest(request) {
 }
 
 /**
- * Obtiene la transcripción en texto plano usando el endpoint de descarga de YouTranscripts.
+ * Obtiene la transcripción analizando el HTML de la página de resultados de YouTranscripts.
+ * Este método es el resultado de la ingeniería inversa.
  * @param {string} youtubeUrl - La URL completa del video de YouTube.
  * @returns {Promise<string>} La transcripción en texto plano.
  */
@@ -67,33 +77,57 @@ async function getYouTranscript(youtubeUrl) {
     throw new Error('Could not extract video ID from URL');
   }
 
-  // Construir la URL de descarga de YouTranscripts para el formato TXT
-  const downloadUrl = `https://www.youtranscripts.com/download/${videoId}/txt`;
+  // 1. URL de la página de resultados (donde el texto está incrustado)
+  const transcriptPageUrl = `https://www.youtranscripts.com/es/transcript/${videoId}/`;
 
-  const response = await fetch(downloadUrl, {
-    method: 'GET', // Es una solicitud GET
+  const response = await fetch(transcriptPageUrl, {
+    method: 'GET',
     headers: {
-      // Headers mínimos para simular una solicitud de navegador
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': 'text/plain'
+      // Simular un agente de usuario para evitar bloqueos
+      'User-Agent': 'Mozilla/5.0 (compatible; Cloudflare Worker)', 
+      'Accept': 'text/html'
     },
     signal: AbortSignal.timeout(30000)
-  })
+  });
 
   if (!response.ok) {
-    throw new Error(`Download request failed: ${response.status}`);
+    throw new Error(`Failed to fetch transcript page: ${response.status}`);
   }
 
-  // La respuesta es el texto plano de la transcripción
-  const transcriptText = await response.text();
+  const htmlText = await response.text();
 
-  // YouTranscripts devuelve un archivo de texto. Si el archivo está vacío o es muy corto,
-  // podría indicar un error o que no hay transcripción disponible.
-  if (transcriptText.length < 50) {
-      throw new Error('Transcript content is too short or empty. Check video availability.');
+  // 2. Análisis de la cadena HTML para encontrar el texto de la transcripción.
+  // Buscamos el texto que está entre dos marcadores estables en el HTML.
+  const startMarker = 'Descargar TranscripciónFormato: txt, docx, pdf, srt, csv';
+  const endMarker = 'Volver Arriba';
+
+  let startIndex = htmlText.indexOf(startMarker);
+  if (startIndex === -1) {
+      throw new Error('Could not find transcript start marker in HTML.');
+  }
+  
+  // Ajustar el inicio para saltar el marcador
+  startIndex += startMarker.length;
+
+  const endIndex = htmlText.indexOf(endMarker, startIndex);
+  if (endIndex === -1) {
+      throw new Error('Could not find transcript end marker in HTML.');
   }
 
-  return transcriptText;
+  let rawTranscript = htmlText.substring(startIndex, endIndex);
+
+  // 3. Limpieza del texto: eliminar etiquetas HTML, saltos de línea excesivos y marcadores de música.
+  rawTranscript = rawTranscript
+    .replace(/<[^>]*>/g, '') // Eliminar todas las etiquetas HTML
+    .replace(/\[Música\]|\[Aplausos\]/g, '') // Eliminar marcadores de música/aplausos
+    .replace(/\s+/g, ' ') // Reemplazar múltiples espacios con uno solo
+    .trim();
+
+  if (rawTranscript.length < 50) {
+      throw new Error('Transcript content is too short or empty after parsing. Check video availability.');
+  }
+
+  return rawTranscript;
 }
 
 function errorResponse(message, status) {
