@@ -48,7 +48,7 @@ async function getYouTubeTranscript(videoId) {
   if (!response.ok) throw new Error(`API request failed: ${response.status}`)
   const data = await response.json()
   if (!data.data?.transcripts) throw new Error('No transcript available')
-  return data.data.transcripts.map(item => item.t).join(' ')
+  return data.data.transcripts.map(item => item.t).join('\n')
 }
 function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data, null, 2), {
