@@ -1,99 +1,58 @@
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
-
-/**
- * Extrae el ID del video de una URL de YouTube.
- */
-function extractVideoId(url) {
-  try {
-    const urlObj = new URL(url);
-    if (urlObj.hostname.includes('youtu.be')) {
-      return urlObj.pathname.substring(1);
-    }
-    if (urlObj.hostname.includes('youtube.com')) {
-      return urlObj.searchParams.get('v');
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type'
 }
-
 async function handleRequest(request) {
-  // Manejar solicitudes OPTIONS para CORS
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
-  }
-
-  const url = new URL(request.url);
-  
-  // Validar el endpoint
+  const url = new URL(request.url)
   if (!url.pathname.startsWith('/transcript')) {
-    return new Response('Endpoint not found. Use /transcript?url=...', { status: 404 });
+    return jsonResponse({ success: false, message: 'Endpoint not found. Use /transcript' }, 404)
   }
-
-  const youtubeUrl = url.searchParams.get('url');
-  
-  // Validar la URL de YouTube
-  if (!youtubeUrl || (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be'))) {
-    return new Response('Invalid or missing YouTube URL parameter.', { status: 400 });
+  const youtubeUrl = url.searchParams.get('url')
+  if (!youtubeUrl?.trim() || (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be'))) {
+    return jsonResponse({ success: false, message: 'Invalid or missing YouTube URL' }, 400)
   }
-
   try {
-    const transcript = await getTranscriptFromAPI(youtubeUrl);
-    
-    // Devolver la transcripción en texto plano con encabezados CORS
-    return new Response(transcript, { 
-      status: 200, 
-      headers: { 
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Access-Control-Allow-Origin': '*'
-      } 
-    });
+    const videoId = extractVideoId(youtubeUrl)
+    const transcript = await getYouTubeTranscript(videoId)
+    return jsonResponse({ success: true, transcript }, 200)
   } catch (error) {
-    console.error(error);
-    return new Response(`Transcription unavailable: ${error.message}`, { status: 400, headers: { 'Access-Control-Allow-Origin': '*' } });
+    return jsonResponse({ success: false, message: 'Transcription unavailable' }, 400)
   }
 }
-
-/**
- * Llama a la API de ingeniería inversa para obtener la transcripción.
- */
-async function getTranscriptFromAPI(youtubeUrl) {
-  const videoId = extractVideoId(youtubeUrl);
-
-  if (!videoId) {
-    throw new Error('Could not extract video ID from URL');
+function extractVideoId(url) {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+    /youtube\.com\/embed\/([^&\n?#]+)/,
+    /youtube\.com\/v\/([^&\n?#]+)/
+  ]
+  for (const pattern of patterns) {
+    const match = url.match(pattern)
+    if (match) return match[1]
   }
-
-  // Endpoint de la API de ingeniería inversa
-  const apiURL = "https://yt-to-text.com/api/v1/Subtitles";
-
-  const response = await fetch(apiURL, {
-    method: "POST",
+  throw new Error('Invalid YouTube URL')
+}
+async function getYouTubeTranscript(videoId) {
+  const response = await fetch('https://yt-to-text.com/api/v1/Subtitles', {
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
-      // Se recomienda incluir un User-Agent para evitar ser bloqueado
-      "User-Agent": "Mozilla/5.0 (compatible; Cloudflare Worker)"
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (compatible; Cloudflare Worker)'
     },
     body: JSON.stringify({ video_id: videoId }),
     signal: AbortSignal.timeout(30000)
-  });
-
-  if (!response.ok) {
-    throw new Error(`API request failed with status: ${response.status}`);
-  }
-
-  const data = await response.json();
-
-  // Lógica de extracción: Acceder al array de transcripciones y concatenar el campo 't'
-  if (!data.data || !data.data.transcripts || data.data.transcripts.length === 0) {
-    throw new Error('No transcript available from the API.');
-  }
-
-  // Convertir el array de objetos de transcripción a texto plano
-  const transcriptText = data.data.transcripts.map(item => item.t).join(' ');
-
-  return transcriptText;
+  })
+  if (!response.ok) throw new Error(`API request failed: ${response.status}`)
+  const data = await response.json()
+  if (!data.data?.transcripts) throw new Error('No transcript available')
+  return data.data.transcripts.map(item => item.t).join(' ')
+}
+function jsonResponse(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS, ...extraHeaders }
+  })
 }
