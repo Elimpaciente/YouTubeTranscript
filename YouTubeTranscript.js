@@ -1,7 +1,6 @@
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
-
 const METADATA = {
   developer: 'El Impaciente',
   credits: 'Ashlynn Repository',
@@ -10,130 +9,52 @@ const METADATA = {
     ashlynn_repository: 'https://t.me/Ashlynn_Repository'
   }
 }
-
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type'
 }
-
-/**
- * Extrae el ID del video de una URL de YouTube.
- * Soporta formatos como:
- * - https://youtu.be/JPFFoYAWkrQ
- * - https://www.youtube.com/watch?v=JPFFoYAWkrQ
- */
-function extractVideoId(url) {
-  try {
-    const urlObj = new URL(url);
-    if (urlObj.hostname.includes('youtu.be')) {
-      return urlObj.pathname.substring(1);
-    }
-    if (urlObj.hostname.includes('youtube.com')) {
-      return urlObj.searchParams.get('v');
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
 async function handleRequest(request) {
-  // Manejar solicitudes OPTIONS para CORS
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: CORS });
-  }
-
   const url = new URL(request.url)
   if (!url.pathname.startsWith('/transcript')) {
     return errorResponse('Endpoint not found. Use /transcript', 404)
   }
-
   const youtubeUrl = url.searchParams.get('url')
   if (!youtubeUrl?.trim() || (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be'))) {
     return errorResponse('Invalid or missing YouTube URL', 400)
   }
-
   try {
-    // **MODIFICACIÓN CLAVE:** Usar la función de Web Scraping
-    const transcript = await getYouTranscript(youtubeUrl) 
+    const transcript = await getKomeTranscript(youtubeUrl)
     return jsonResponse({ status_code: 200, ...METADATA, response: transcript }, 200, { 'Cache-Control': 'public, max-age=3600' })
   } catch (error) {
-    console.error(error.message);
-    return errorResponse(`Transcription unavailable: ${error.message}`, 400)
+    return errorResponse('Transcription unavailable', 400)
   }
 }
-
-/**
- * Obtiene la transcripción analizando el HTML de la página de resultados de YouTranscripts.
- * Este método es el resultado de la ingeniería inversa.
- * @param {string} youtubeUrl - La URL completa del video de YouTube.
- * @returns {Promise<string>} La transcripción en texto plano.
- */
-async function getYouTranscript(youtubeUrl) {
-  const videoId = extractVideoId(youtubeUrl);
-
-  if (!videoId) {
-    throw new Error('Could not extract video ID from URL');
-  }
-
-  // 1. URL de la página de resultados (donde el texto está incrustado)
-  const transcriptPageUrl = `https://www.youtranscripts.com/es/transcript/${videoId}/`;
-
-  const response = await fetch(transcriptPageUrl, {
-    method: 'GET',
+async function getKomeTranscript(youtubeUrl) {
+  const response = await fetch('https://kome.ai/api/transcript', {
+    method: 'POST',
     headers: {
-      // Simular un agente de usuario para evitar bloqueos
-      'User-Agent': 'Mozilla/5.0 (compatible; Cloudflare Worker)', 
-      'Accept': 'text/html'
+      'Content-Type': 'application/json',
+      'Origin': 'https://kome.ai',
+      'Referer': 'https://kome.ai/tools/youtube-transcript-generator',
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json, text/plain, */*'
     },
+    body: JSON.stringify({ video_id: youtubeUrl, format: true }),
     signal: AbortSignal.timeout(30000)
-  });
-
+  })
   if (!response.ok) {
-    throw new Error(`Failed to fetch transcript page: ${response.status}`);
+    throw new Error(`API request failed: ${response.status}`)
   }
-
-  const htmlText = await response.text();
-
-  // 2. Análisis de la cadena HTML para encontrar el texto de la transcripción.
-  // Buscamos el texto que está entre dos marcadores estables en el HTML.
-  const startMarker = 'Descargar TranscripciónFormato: txt, docx, pdf, srt, csv';
-  const endMarker = 'Volver Arriba';
-
-  let startIndex = htmlText.indexOf(startMarker);
-  if (startIndex === -1) {
-      throw new Error('Could not find transcript start marker in HTML.');
+  const data = await response.json()
+  if (!data.transcript) {
+    throw new Error('No transcript available')
   }
-  
-  // Ajustar el inicio para saltar el marcador
-  startIndex += startMarker.length;
-
-  const endIndex = htmlText.indexOf(endMarker, startIndex);
-  if (endIndex === -1) {
-      throw new Error('Could not find transcript end marker in HTML.');
-  }
-
-  let rawTranscript = htmlText.substring(startIndex, endIndex);
-
-  // 3. Limpieza del texto: eliminar etiquetas HTML, saltos de línea excesivos y marcadores de música.
-  rawTranscript = rawTranscript
-    .replace(/<[^>]*>/g, '') // Eliminar todas las etiquetas HTML
-    .replace(/\[Música\]|\[Aplausos\]/g, '') // Eliminar marcadores de música/aplausos
-    .replace(/\s+/g, ' ') // Reemplazar múltiples espacios con uno solo
-    .trim();
-
-  if (rawTranscript.length < 50) {
-      throw new Error('Transcript content is too short or empty after parsing. Check video availability.');
-  }
-
-  return rawTranscript;
+  return data.transcript
 }
-
 function errorResponse(message, status) {
   return jsonResponse({ status_code: status, ...METADATA, message }, status)
 }
-
 function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
