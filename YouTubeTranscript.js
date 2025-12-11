@@ -42,8 +42,15 @@ async function handleRequest(request) {
 
   const url = new URL(request.url)
   
-  if (!url.pathname.startsWith('/transcript')) {
-    return errorResponse('Endpoint not found. Use /transcript?url=YOUTUBE_URL', 404)
+  // Endpoints disponibles
+  if (url.pathname === '/' || url.pathname === '') {
+    return new Response(getUsageHTML(), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', ...CORS }
+    });
+  }
+
+  if (!url.pathname.startsWith('/transcript') && !url.pathname.startsWith('/html')) {
+    return errorResponse('Endpoint not found. Use /transcript or /html', 404)
   }
 
   const youtubeUrl = url.searchParams.get('url')
@@ -51,30 +58,58 @@ async function handleRequest(request) {
     return errorResponse('Invalid or missing YouTube URL', 400)
   }
 
+  const videoId = extractVideoId(youtubeUrl);
+  if (!videoId) {
+    return errorResponse('Could not extract video ID from URL', 400);
+  }
+
   try {
-    const transcript = await getYouTranscript(youtubeUrl) 
-    return jsonResponse({ 
-      status_code: 200, 
-      ...METADATA, 
-      video_id: extractVideoId(youtubeUrl),
-      response: transcript 
-    }, 200, { 'Cache-Control': 'public, max-age=3600' })
+    // Modo HTML: Devuelve el HTML completo
+    if (url.pathname.startsWith('/html')) {
+      const html = await fetchYouTranscriptHTML(videoId);
+      
+      // Si se solicita modo raw, devolver HTML directo
+      if (url.searchParams.get('raw') === 'true') {
+        return new Response(html, {
+          headers: { 
+            'Content-Type': 'text/html; charset=utf-8',
+            ...CORS 
+          }
+        });
+      }
+      
+      // Modo JSON: devolver HTML como string en JSON
+      return jsonResponse({ 
+        status_code: 200, 
+        ...METADATA, 
+        video_id: videoId,
+        html_content: html,
+        html_length: html.length
+      }, 200);
+    }
+    
+    // Modo Transcript: Extrae y limpia la transcripción
+    if (url.pathname.startsWith('/transcript')) {
+      const transcript = await getYouTranscript(videoId);
+      return jsonResponse({ 
+        status_code: 200, 
+        ...METADATA, 
+        video_id: videoId,
+        response: transcript,
+        length: transcript.length
+      }, 200, { 'Cache-Control': 'public, max-age=3600' });
+    }
+
   } catch (error) {
-    console.error('Transcription error:', error.message);
-    return errorResponse(`Transcription unavailable: ${error.message}`, 400)
+    console.error('Error:', error.message);
+    return errorResponse(`Error: ${error.message}`, 400)
   }
 }
 
 /**
- * Obtiene la transcripción mediante web scraping de YouTranscripts
+ * Obtiene el HTML completo de la página de YouTranscripts
  */
-async function getYouTranscript(youtubeUrl) {
-  const videoId = extractVideoId(youtubeUrl);
-
-  if (!videoId) {
-    throw new Error('Could not extract video ID from URL');
-  }
-
+async function fetchYouTranscriptHTML(videoId) {
   const transcriptPageUrl = `https://www.youtranscripts.com/es/transcript/${videoId}/`;
 
   const response = await fetch(transcriptPageUrl, {
@@ -89,22 +124,26 @@ async function getYouTranscript(youtubeUrl) {
   });
 
   if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('Video transcript not found. The video may not have captions available.');
-    }
-    throw new Error(`Failed to fetch transcript page: HTTP ${response.status}`);
+    throw new Error(`Failed to fetch page: HTTP ${response.status}`);
   }
 
-  const htmlText = await response.text();
+  return await response.text();
+}
 
-  // Verificar si la página indica que no hay transcripción disponible
+/**
+ * Obtiene la transcripción limpia
+ */
+async function getYouTranscript(videoId) {
+  const htmlText = await fetchYouTranscriptHTML(videoId);
+
+  // Verificar si hay transcripción disponible
   if (htmlText.includes('No transcript found') || 
       htmlText.includes('Transcripción no disponible') ||
       htmlText.includes('no captions')) {
     throw new Error('This video does not have captions/transcripts available.');
   }
 
-  // Método 1: Buscar usando marcadores de texto (más confiable)
+  // Método 1: Buscar usando marcadores de texto
   let transcript = extractByMarkers(htmlText);
   
   // Método 2 (fallback): Buscar usando patrones HTML
@@ -113,7 +152,7 @@ async function getYouTranscript(youtubeUrl) {
   }
 
   if (!transcript) {
-    throw new Error('Could not extract transcript from page. The page structure may have changed.');
+    throw new Error('Could not extract transcript. Try using /html endpoint to inspect the page structure.');
   }
 
   return transcript;
@@ -123,13 +162,11 @@ async function getYouTranscript(youtubeUrl) {
  * Extrae la transcripción usando marcadores de texto
  */
 function extractByMarkers(html) {
-  // Marcadores exactos según el HTML de YouTranscripts
   const startMarker = 'Descargar TranscripciónFormato: txt, docx, pdf, srt, csv';
   const endMarker = 'Volver Arriba';
 
   let startIndex = html.indexOf(startMarker);
   if (startIndex === -1) {
-    // Intentar con variaciones del marcador
     const altStartMarkers = [
       'Descargar Transcripción',
       'Download Transcript',
@@ -158,8 +195,7 @@ function extractByMarkers(html) {
 
   let rawTranscript = html.substring(startIndex, endIndex);
   
-  // Validar que el contenido extraído tiene sentido
-  if (rawTranscript.length < 20 || !rawTranscript.includes('<')) {
+  if (rawTranscript.length < 20) {
     return null;
   }
 
@@ -167,13 +203,11 @@ function extractByMarkers(html) {
 }
 
 /**
- * Extrae la transcripción buscando patrones HTML comunes
+ * Extrae la transcripción buscando patrones HTML
  */
 function extractByHTMLPattern(html) {
-  // Buscar divs o elementos que contengan la transcripción
   const patterns = [
     /<div[^>]*class="[^"]*transcript[^"]*"[^>]*>(.*?)<\/div>/is,
-    /<div[^>]*id="[^"]*transcript[^"]*"[^>]*>(.*?)<\/div>/is,
     /<article[^>]*>(.*?)<\/article>/is,
     /<main[^>]*>(.*?)<\/main>/is
   ];
@@ -182,7 +216,7 @@ function extractByHTMLPattern(html) {
     const match = html.match(pattern);
     if (match && match[1]) {
       const cleaned = cleanTranscript(match[1]);
-      if (cleaned.length > 100) { // Verificar que tenga contenido significativo
+      if (cleaned && cleaned.length > 100) {
         return cleaned;
       }
     }
@@ -192,24 +226,17 @@ function extractByHTMLPattern(html) {
 }
 
 /**
- * Limpia el texto extraído de etiquetas HTML y caracteres no deseados
+ * Limpia el texto extraído
  */
 function cleanTranscript(text) {
   let cleaned = text
-    // Eliminar scripts y estilos completos
     .replace(/<script[^>]*>.*?<\/script>/gis, '')
     .replace(/<style[^>]*>.*?<\/style>/gis, '')
-    // Eliminar comentarios HTML
     .replace(/<!--.*?-->/gs, '')
-    // Convertir <br>, <br/>, <br /> en saltos de línea
     .replace(/<br\s*\/?>/gi, '\n')
-    // Convertir </p> en salto de línea para mantener párrafos
     .replace(/<\/p>/gi, '\n')
-    // Eliminar todas las demás etiquetas HTML
     .replace(/<[^>]*>/g, ' ')
-    // Eliminar marcadores de música/aplausos en múltiples idiomas
-    .replace(/\[Música\]|\[Aplausos\]|\[Music\]|\[Applause\]|\[♪\]|\[música\]/gi, '')
-    // Decodificar entidades HTML comunes
+    .replace(/\[Música\]|\[Aplausos\]|\[Music\]|\[Applause\]|\[♪\]/gi, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -218,24 +245,190 @@ function cleanTranscript(text) {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&mdash;/g, '—')
     .replace(/&ndash;/g, '–')
-    // Eliminar múltiples saltos de línea consecutivos (máximo 2)
     .replace(/\n{3,}/g, '\n\n')
-    // Reemplazar múltiples espacios con uno solo
     .replace(/ {2,}/g, ' ')
-    // Eliminar espacios al inicio y final de cada línea
     .split('\n')
     .map(line => line.trim())
     .filter(line => line.length > 0)
     .join('\n')
-    // Eliminar espacios al inicio y final del texto completo
     .trim();
 
-  // Validación final: asegurar que tengamos contenido significativo
   if (cleaned.length < 50) {
     return null;
   }
 
   return cleaned;
+}
+
+/**
+ * Página de uso/documentación
+ */
+function getUsageHTML() {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Transcript API</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.6; 
+      color: #333; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { 
+      max-width: 900px; 
+      margin: 0 auto; 
+      background: white; 
+      padding: 40px;
+      border-radius: 15px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 { 
+      color: #667eea; 
+      margin-bottom: 10px;
+      font-size: 2.5em;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 1.1em;
+    }
+    h2 { 
+      color: #764ba2; 
+      margin: 30px 0 15px;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+    }
+    .endpoint { 
+      background: #f8f9fa; 
+      padding: 15px;
+      border-radius: 8px;
+      margin: 15px 0;
+      border-left: 4px solid #667eea;
+    }
+    .endpoint h3 {
+      color: #764ba2;
+      margin-bottom: 10px;
+    }
+    code { 
+      background: #2d2d2d; 
+      color: #f8f8f2;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+    }
+    pre { 
+      background: #2d2d2d; 
+      color: #f8f8f2;
+      padding: 15px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+    .example { 
+      background: #e3f2fd;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 15px 0;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 2px solid #eee;
+      text-align: center;
+      color: #666;
+    }
+    .badge {
+      display: inline-block;
+      background: #667eea;
+      color: white;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.85em;
+      margin: 5px 5px 5px 0;
+    }
+    a { color: #667eea; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎬 YouTube Transcript API</h1>
+    <p class="subtitle">Extrae transcripciones de videos de YouTube fácilmente</p>
+
+    <h2>📋 Endpoints Disponibles</h2>
+
+    <div class="endpoint">
+      <h3>1. Obtener Transcripción Limpia</h3>
+      <p><code>GET /transcript?url=YOUTUBE_URL</code></p>
+      <p>Devuelve la transcripción procesada y limpia en formato JSON.</p>
+      <div class="example">
+        <strong>Ejemplo:</strong><br>
+        <code>/transcript?url=https://youtu.be/JPFFoYAWkrQ</code>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <h3>2. Obtener HTML Completo (JSON)</h3>
+      <p><code>GET /html?url=YOUTUBE_URL</code></p>
+      <p>Devuelve el HTML completo de la página en formato JSON para análisis.</p>
+      <div class="example">
+        <strong>Ejemplo:</strong><br>
+        <code>/html?url=https://youtu.be/JPFFoYAWkrQ</code>
+      </div>
+    </div>
+
+    <div class="endpoint">
+      <h3>3. Obtener HTML Raw</h3>
+      <p><code>GET /html?url=YOUTUBE_URL&raw=true</code></p>
+      <p>Devuelve el HTML completo directamente (sin JSON wrapper).</p>
+      <div class="example">
+        <strong>Ejemplo:</strong><br>
+        <code>/html?url=https://youtu.be/JPFFoYAWkrQ&raw=true</code>
+      </div>
+    </div>
+
+    <h2>🎯 Formatos de URL Soportados</h2>
+    <div class="example">
+      <span class="badge">✓ youtu.be</span>
+      <span class="badge">✓ youtube.com/watch</span>
+      <br><br>
+      <code>https://youtu.be/JPFFoYAWkrQ</code><br>
+      <code>https://www.youtube.com/watch?v=JPFFoYAWkrQ</code>
+    </div>
+
+    <h2>📝 Ejemplo de Respuesta</h2>
+    <pre>{
+  "status_code": 200,
+  "developer": "El Impaciente",
+  "video_id": "JPFFoYAWkrQ",
+  "response": "Transcripción del video...",
+  "length": 1234
+}</pre>
+
+    <h2>⚠️ Códigos de Error</h2>
+    <div class="example">
+      <strong>400:</strong> URL inválida o video sin transcripción<br>
+      <strong>404:</strong> Endpoint no encontrado<br>
+      <strong>500:</strong> Error interno del servidor
+    </div>
+
+    <div class="footer">
+      <p><strong>Desarrollado por:</strong> ${METADATA.developer}</p>
+      <p><strong>Créditos:</strong> ${METADATA.credits}</p>
+      <p>
+        <a href="${METADATA.telegram_channels.el_impaciente}" target="_blank">📱 Canal Telegram</a> | 
+        <a href="${METADATA.telegram_channels.ashlynn_repository}" target="_blank">📦 Repository</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 function errorResponse(message, status) {
