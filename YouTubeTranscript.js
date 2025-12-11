@@ -107,27 +107,96 @@ async function handleRequest(request) {
 }
 
 /**
- * Obtiene el HTML completo de la página de YouTranscripts
+ * Obtiene el HTML completo de la página de YouTranscripts con reintentos
  */
-async function fetchYouTranscriptHTML(videoId) {
+async function fetchYouTranscriptHTML(videoId, retryCount = 0) {
+  const maxRetries = 3;
   const transcriptPageUrl = `https://www.youtranscripts.com/es/transcript/${videoId}/`;
 
-  const response = await fetch(transcriptPageUrl, {
-    method: 'GET',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-      'Referer': 'https://www.youtranscripts.com/',
-    },
-    signal: AbortSignal.timeout(30000)
-  });
+  // Headers mejorados para simular mejor un navegador real
+  const headers = {
+    'User-Agent': getRandomUserAgent(),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Referer': 'https://www.google.com/',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-User': '?1',
+    'Cache-Control': 'max-age=0'
+  };
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch page: HTTP ${response.status}`);
+  try {
+    // Pequeño delay aleatorio para evitar detección (excepto en primer intento)
+    if (retryCount > 0) {
+      await sleep(1000 + Math.random() * 2000);
+    }
+
+    const response = await fetch(transcriptPageUrl, {
+      method: 'GET',
+      headers: headers,
+      signal: AbortSignal.timeout(30000)
+    });
+
+    // Manejar error 429 (Too Many Requests)
+    if (response.status === 429) {
+      if (retryCount < maxRetries) {
+        const waitTime = Math.pow(2, retryCount) * 2000; // Exponential backoff: 2s, 4s, 8s
+        console.log(`Rate limited (429). Retry ${retryCount + 1}/${maxRetries} after ${waitTime}ms`);
+        await sleep(waitTime);
+        return fetchYouTranscriptHTML(videoId, retryCount + 1);
+      }
+      throw new Error('Rate limit exceeded. Please try again in a few minutes.');
+    }
+
+    // Manejar otros errores HTTP
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Video transcript not found. The video may not have captions or the ID is incorrect.');
+      }
+      if (response.status === 403) {
+        throw new Error('Access forbidden. The site may be blocking automated requests.');
+      }
+      throw new Error(`Failed to fetch page: HTTP ${response.status}`);
+    }
+
+    return await response.text();
+
+  } catch (error) {
+    // Si es un error de timeout y aún tenemos reintentos
+    if (error.name === 'AbortError' && retryCount < maxRetries) {
+      console.log(`Timeout. Retry ${retryCount + 1}/${maxRetries}`);
+      await sleep(2000);
+      return fetchYouTranscriptHTML(videoId, retryCount + 1);
+    }
+    throw error;
   }
+}
 
-  return await response.text();
+/**
+ * Genera un User-Agent aleatorio para evitar detección
+ */
+function getRandomUserAgent() {
+  const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+  ];
+  return userAgents[Math.floor(Math.random() * userAgents.length)];
+}
+
+/**
+ * Función auxiliar para esperar (sleep)
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -414,8 +483,18 @@ function getUsageHTML() {
     <h2>⚠️ Códigos de Error</h2>
     <div class="example">
       <strong>400:</strong> URL inválida o video sin transcripción<br>
-      <strong>404:</strong> Endpoint no encontrado<br>
+      <strong>403:</strong> Acceso bloqueado (demasiadas peticiones)<br>
+      <strong>404:</strong> Video no encontrado o sin subtítulos<br>
+      <strong>429:</strong> Rate limit - Espera unos minutos e intenta de nuevo<br>
       <strong>500:</strong> Error interno del servidor
+    </div>
+
+    <h2>💡 Consejos de Uso</h2>
+    <div class="example">
+      <strong>• Rate Limiting:</strong> El Worker implementa reintentos automáticos con exponential backoff<br>
+      <strong>• Caché:</strong> Las transcripciones se cachean por 1 hora<br>
+      <strong>• User-Agent:</strong> Se rotan automáticamente para evitar bloqueos<br>
+      <strong>• Timeout:</strong> Las peticiones tienen un timeout de 30 segundos
     </div>
 
     <div class="footer">
