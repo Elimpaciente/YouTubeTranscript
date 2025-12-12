@@ -8,9 +8,6 @@ const CORS = {
 }
 async function handleRequest(request) {
   const url = new URL(request.url)
-  if (!url.pathname.startsWith('/transcript')) {
-    return jsonResponse({ success: false, message: 'Endpoint not found. Use /transcript' }, 404)
-  }
   const youtubeUrl = url.searchParams.get('url')
   if (!youtubeUrl?.trim() || (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be'))) {
     return jsonResponse({ success: false, message: 'Invalid or missing YouTube URL' }, 400)
