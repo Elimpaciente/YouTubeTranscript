@@ -204,6 +204,9 @@
                     <button class="btn-primary" id="transcribeBtn" onclick="transcribeVideo()">
                         Transcribe Video
                     </button>
+                    <button class="btn-primary" id="summarizeBtn" onclick="summarizeVideo()">
+                        Summarize Video
+                    </button>
                 </div>
             </div>
             <div class="loading" id="loading">
@@ -224,7 +227,8 @@
         </div>
     </div>
     <script>
-        const API_BASE = 'https://yt-transcript.apisimpacientes.workers.dev/transcript?url=';
+        const TRANSCRIPT_API = 'https://yt-transcript.apisimpacientes.workers.dev/transcript?url=';
+        const SUMMARIZER_API = 'https://youtube-summarizer.apisimpacientes.workers.dev/summarize?url=';
         function getYouTubeUrl() {
             const input = document.getElementById('youtubeUrl').value.trim();
             if (!input) {
@@ -251,12 +255,13 @@
             document.getElementById('youtubeUrl').value = '';
             const btn = document.getElementById('transcribeBtn');
             btn.disabled = true;
+            document.getElementById('loading').querySelector('p').textContent = 'Transcribing video, please wait...';
             document.getElementById('loading').style.display = 'block';
             try {
-                const response = await fetch(API_BASE + encodedUrl);
+                const response = await fetch(TRANSCRIPT_API + encodedUrl);
                 const data = await response.json();
                 if (data.success && data.transcript) {
-                    displayTranscript(data.transcript);
+                    displayTranscript(data.transcript, 'Transcript Ready');
                 } else {
                     displayNoTranscript(data.message || 'Transcript not available');
                 }
@@ -267,9 +272,35 @@
                 btn.disabled = false;
             }
         }
-        function displayTranscript(text) {
+        async function summarizeVideo() {
+            clearError();
+            const encodedUrl = getYouTubeUrl();
+            if (!encodedUrl) return;
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('youtubeUrl').value = '';
+            const btn = document.getElementById('summarizeBtn');
+            btn.disabled = true;
+            document.getElementById('loading').querySelector('p').textContent = 'Generating summary, please wait...';
+            document.getElementById('loading').style.display = 'block';
+            try {
+                const response = await fetch(SUMMARIZER_API + encodedUrl + '&language=english');
+                const data = await response.json();
+                if (data.success && data.summary) {
+                    displayTranscript(data.summary, 'Summary Ready');
+                } else {
+                    displayNoTranscript(data.message || 'Summary not available');
+                }
+            } catch (error) {
+                showError('Error: ' + error.message + '. Please check the URL and try again.');
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+        function displayTranscript(text, headerText) {
             document.getElementById('transcriptText').textContent = text;
             document.getElementById('transcriptText').style.display = 'block';
+            document.getElementById('resultHeader').querySelector('h3').textContent = headerText;
             document.getElementById('resultHeader').style.display = 'block';
             document.getElementById('noTranscript').style.display = 'none';
             document.getElementById('copyBtn').style.display = 'block';
