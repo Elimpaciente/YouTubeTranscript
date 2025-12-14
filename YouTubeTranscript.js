@@ -84,14 +84,15 @@ async function getTranscriptKome(videoUrl) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'Origin': 'https://kome.ai',
+      'Referer': 'https://kome.ai/tools/youtube-transcript-generator',
       'User-Agent': 'Mozilla/5.0',
       'Accept': 'application/json, text/plain, */*'
     },
     body: JSON.stringify({
       video_id: videoUrl,
       format: true
-    }),
-    signal: AbortSignal.timeout(30000)
+    })
   })
   if (!response.ok) throw new Error(`API request failed: ${response.status}`)
   const data = await response.json()
