@@ -48,7 +48,14 @@
         .form-group {
             margin-bottom: 25px;
         }
-        .form-group input {
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.95em;
+            color: #333;
+            font-weight: 600;
+        }
+        .form-group input, .form-group select {
             width: 100%;
             padding: 12px 16px;
             border: 2px solid #e0e0e0;
@@ -56,7 +63,7 @@
             font-size: 0.95em;
             transition: all 0.3s ease;
         }
-        .form-group input:focus {
+        .form-group input:focus, .form-group select:focus {
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -194,6 +201,21 @@
             <div class="error" id="errorMsg"></div>
             <div id="formSection">
                 <div class="form-group">
+                    <label for="languageSelect">Select language for summary:</label>
+                    <select id="languageSelect">
+                        <option value="english">English</option>
+                        <option value="spanish">Spanish</option>
+                        <option value="french">French</option>
+                        <option value="german">German</option>
+                        <option value="italian">Italian</option>
+                        <option value="portuguese">Portuguese</option>
+                        <option value="russian">Russian</option>
+                        <option value="chinese">Chinese</option>
+                        <option value="japanese">Japanese</option>
+                        <option value="korean">Korean</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <input 
                         type="text" 
                         id="youtubeUrl" 
@@ -211,16 +233,16 @@
             </div>
             <div class="loading" id="loading">
                 <div class="spinner"></div>
-                <p>Transcribing video, please wait...</p>
+                <p>Processing, please wait...</p>
             </div>
             <div class="result" id="result">
                 <div class="result-header" id="resultHeader">
                     <h3>Transcript Ready</h3>
                 </div>
                 <div class="no-transcript" id="noTranscript" style="display: none;">
-                    <h3>Transcript not available</h3>
+                    <h3>Content not available</h3>
                 </div>
-                <button class="btn-copy" id="copyBtn" onclick="copyTranscript()" style="width: 100%; margin-bottom: 20px;">Copy Transcript</button>
+                <button class="btn-copy" id="copyBtn" onclick="copyTranscript()" style="width: 100%; margin-bottom: 20px;">Copy Content</button>
                 <div class="copy-feedback" id="copyFeedback">Copied to clipboard!</div>
                 <div class="transcript-box" id="transcriptText"></div>
             </div>
@@ -229,6 +251,18 @@
     <script>
         const TRANSCRIPT_API = 'https://yt-transcript.apisimpacientes.workers.dev/transcript?url=';
         const SUMMARIZER_API = 'https://youtube-summarizer.apisimpacientes.workers.dev/summarize?url=';
+        
+        // Restaurar idioma guardado
+        const savedLanguage = localStorage.getItem('selectedLanguage');
+        if (savedLanguage) {
+            document.getElementById('languageSelect').value = savedLanguage;
+        }
+        
+        // Guardar idioma cuando cambia
+        document.getElementById('languageSelect').addEventListener('change', function() {
+            localStorage.setItem('selectedLanguage', this.value);
+        });
+        
         function getYouTubeUrl() {
             const input = document.getElementById('youtubeUrl').value.trim();
             if (!input) {
@@ -241,7 +275,7 @@
             }
             try {
                 new URL(videoUrl);
-                return encodeURIComponent(videoUrl);
+                return videoUrl;
             } catch (e) {
                 showError('Please enter a valid YouTube URL');
                 return null;
@@ -249,8 +283,8 @@
         }
         async function transcribeVideo() {
             clearError();
-            const encodedUrl = getYouTubeUrl();
-            if (!encodedUrl) return;
+            const videoUrl = getYouTubeUrl();
+            if (!videoUrl) return;
             document.getElementById('result').style.display = 'none';
             document.getElementById('youtubeUrl').value = '';
             const btn = document.getElementById('transcribeBtn');
@@ -258,7 +292,7 @@
             document.getElementById('loading').querySelector('p').textContent = 'Transcribing video, please wait...';
             document.getElementById('loading').style.display = 'block';
             try {
-                const response = await fetch(TRANSCRIPT_API + encodedUrl);
+                const response = await fetch(TRANSCRIPT_API + encodeURIComponent(videoUrl));
                 const data = await response.json();
                 if (data.success && data.transcript) {
                     displayTranscript(data.transcript, 'Transcript Ready');
@@ -274,8 +308,9 @@
         }
         async function summarizeVideo() {
             clearError();
-            const encodedUrl = getYouTubeUrl();
-            if (!encodedUrl) return;
+            const videoUrl = getYouTubeUrl();
+            if (!videoUrl) return;
+            const language = document.getElementById('languageSelect').value;
             document.getElementById('result').style.display = 'none';
             document.getElementById('youtubeUrl').value = '';
             const btn = document.getElementById('summarizeBtn');
@@ -283,7 +318,7 @@
             document.getElementById('loading').querySelector('p').textContent = 'Generating summary, please wait...';
             document.getElementById('loading').style.display = 'block';
             try {
-                const response = await fetch(SUMMARIZER_API + encodedUrl + '&language=english');
+                const response = await fetch(SUMMARIZER_API + encodeURIComponent(videoUrl) + '&language=' + language);
                 const data = await response.json();
                 if (data.success && data.summary) {
                     displayTranscript(data.summary, 'Summary Ready');
@@ -311,7 +346,7 @@
             document.getElementById('transcriptText').style.display = 'none';
             document.getElementById('resultHeader').style.display = 'none';
             const noTranscriptDiv = document.getElementById('noTranscript');
-            noTranscriptDiv.querySelector('h3').textContent = message || 'Transcript not available';
+            noTranscriptDiv.querySelector('h3').textContent = message || 'Content not available';
             noTranscriptDiv.style.display = 'block';
             document.getElementById('copyBtn').style.display = 'none';
             document.getElementById('result').style.display = 'block';
@@ -325,7 +360,7 @@
                     feedback.style.display = 'none';
                 }, 2000);
             }).catch(function() {
-                showError('Failed to copy transcript');
+                showError('Failed to copy content');
             });
         }
         function showError(message) {
